@@ -2,6 +2,8 @@ package ar.gustavo.cerobudget
 
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.PackageInstaller
+import android.os.Build
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
@@ -44,6 +46,8 @@ class MainActivity : Activity() {
     private lateinit var estado: TextView
     private lateinit var botonVer: Button
     private lateinit var botonElegir: Button
+    private lateinit var botonActualizar: Button
+    private lateinit var estadoAct: TextView
 
     private fun dp(v: Int) = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics).toInt()
 
@@ -124,6 +128,11 @@ class MainActivity : Activity() {
             setPadding(0, dp(16), 0, 0); gravity = Gravity.START
         })
 
+        botonActualizar = boton("Buscar actualización", false)
+        col.addView(botonActualizar, lp(24))
+        estadoAct = texto("Versión instalada: " + Actualizador.versionInstalada(this), 14f, gris).apply { setPadding(0, dp(8), 0, 0) }
+        col.addView(estadoAct, lp())
+
         setContentView(scroll)
 
         botonElegir.setOnClickListener {
@@ -132,6 +141,7 @@ class MainActivity : Activity() {
             startActivityForResult(i, 7)
         }
         botonIr.setOnClickListener { iniciar() }
+        botonActualizar.setOnClickListener { actualizar() }
         botonVer.setOnClickListener {
             val u = resultado ?: return@setOnClickListener
             try {
@@ -202,5 +212,53 @@ class MainActivity : Activity() {
                 }
             }
         }.start()
+    }
+
+    private fun actualizar() {
+        if (ocupado) return
+        ocupado = true
+        botonActualizar.isEnabled = false
+        estadoAct.setTextColor(gris)
+        estadoAct.text = "Buscando versión nueva…"
+        Thread {
+            try {
+                val info = Actualizador.consultar() ?: throw IllegalStateException("No encontré la versión en GitHub.")
+                val actual = Actualizador.versionInstalada(this)
+                if (info.version <= actual) {
+                    runOnUiThread { estadoAct.text = "Ya tenés la última versión ($actual)." }
+                } else {
+                    runOnUiThread { estadoAct.text = "Bajando la versión ${info.version}…" }
+                    Actualizador.instalar(applicationContext, info.url) { p ->
+                        runOnUiThread { estadoAct.text = "Bajando la versión ${info.version}… ${(p * 100).toInt()} %" }
+                    }
+                    runOnUiThread { estadoAct.text = "Confirmá la actualización en el cuadro de Android." }
+                }
+            } catch (e: Exception) {
+                runOnUiThread { estadoAct.setTextColor(rojo); estadoAct.text = "No se pudo actualizar: " + (e.message ?: e.toString()) }
+            } finally {
+                runOnUiThread { ocupado = false; botonActualizar.isEnabled = true }
+            }
+        }.start()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun intentDeConfirmacion(i: Intent): Intent? =
+        if (Build.VERSION.SDK_INT >= 33) i.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
+        else i.getParcelableExtra(Intent.EXTRA_INTENT)
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.action != Actualizador.ACCION) return
+        when (intent.getIntExtra(PackageInstaller.EXTRA_STATUS, -999)) {
+            PackageInstaller.STATUS_PENDING_USER_ACTION -> {
+                val confirmar = intentDeConfirmacion(intent)
+                if (confirmar != null) startActivity(confirmar.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
+            PackageInstaller.STATUS_SUCCESS -> estadoAct.text = "Actualizada."
+            else -> {
+                estadoAct.setTextColor(rojo)
+                estadoAct.text = "No se instaló: " + (intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "cancelado")
+            }
+        }
     }
 }

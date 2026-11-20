@@ -30,4 +30,5 @@ jobs:
           tag_name: ultima
           name: 0 Presupuesto Editor - última versión
           files: 0-Presupuesto-Editor.apk
+          body: "versionCode=${{ github.run_number }}"
           make_latest: true
