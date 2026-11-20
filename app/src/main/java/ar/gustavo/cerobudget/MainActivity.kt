@@ -79,7 +79,7 @@ class MainActivity : Activity() {
         scroll.addView(col)
 
         col.addView(texto("0 Presupuesto Editor", 30f, tinta, true))
-        col.addView(texto("Mejorar el audio de un video. La imagen se copia sin tocar; el audio sale limpio y con volumen parejo.", 16f, gris).apply { setPadding(0, dp(4), 0, dp(20)) })
+        col.addView(texto("Mejorar el audio de un video: saca ruido y eco de la sala. La imagen se copia sin tocar.", 16f, gris).apply { setPadding(0, dp(4), 0, dp(20)) })
 
         val b1 = bloque("1  Elegí el video")
         botonElegir = boton("Elegir video", false)
@@ -88,12 +88,12 @@ class MainActivity : Activity() {
         b1.addView(info, lp())
         col.addView(b1, lp())
 
-        val b2 = bloque("2  Cuánto ruido sacar")
+        val b2 = bloque("2  Cuánto filtrar")
         grupo = RadioGroup(this)
         val opciones = listOf(
-            "suave" to "Suave · ruido leve, voz muy natural",
-            "normal" to "Normal · taller, ventilador, calle",
-            "fuerte" to "Fuerte · mucho ruido; la voz puede sonar algo procesada"
+            "normal" to "Normal · saca ruido y algo de eco",
+            "fuerte" to "Fuerte · saca ruido y bastante eco",
+            "maxima" to "Máxima · filtra todo: ruido, eco y colas entre frases"
         )
         opciones.forEachIndexed { i, (clave, etiqueta) ->
             grupo.addView(RadioButton(this).apply {
@@ -103,7 +103,7 @@ class MainActivity : Activity() {
                 minHeight = dp(48)
             })
         }
-        grupo.check(101)
+        grupo.check(102)
         b2.addView(grupo, lp())
         col.addView(b2, lp(12))
 
@@ -169,7 +169,7 @@ class MainActivity : Activity() {
         val u = video ?: return
         if (ocupado) return
         ocupado = true
-        val intensidad = findViewById<RadioButton>(grupo.checkedRadioButtonId)?.tag as? String ?: "normal"
+        val intensidad = findViewById<RadioButton>(grupo.checkedRadioButtonId)?.tag as? String ?: "maxima"
         botonIr.isEnabled = false; botonIr.alpha = 0.4f; botonElegir.isEnabled = false
         botonVer.visibility = View.GONE
         barra.visibility = View.VISIBLE; barra.progress = 0

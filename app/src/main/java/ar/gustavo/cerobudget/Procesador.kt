@@ -65,18 +65,22 @@ class Procesador(private val ctx: Context) {
         // 2) Leer el audio
         avance(0.0, "Leyendo el audio…")
         val mono = decodificar(src, aIdx, aFmt, durUs) { p -> avance(p * 0.30, "Leyendo el audio… ${(p * 100).toInt()} %") }
-        val x = mono.x
+        // Todo se procesa a 48 kHz (lo necesita la limpieza con red neuronal)
+        val x = if (mono.rate == 48000) mono.x else remuestrear(mono.x, mono.rate, 48000)
         val antes = Dsp.spread(Dsp.envelope(x, 900))
 
         // 3) Mejorar
-        val lufs = Dsp.process(x, mono.rate, intensidad) { etapa, p ->
-            if (etapa == "ruido") avance(0.30 + p * 0.45, "Limpiando el ruido… ${(p * 100).toInt()} %")
-            else avance(0.76, "Ecualizando y ajustando el volumen…")
+        val lufs = Dsp.process(x, 48000, intensidad) { etapa, p ->
+            when (etapa) {
+                "rnn" -> avance(0.30 + p * 0.20, "Sacando el ruido… ${(p * 100).toInt()} %")
+                "eco" -> avance(0.50 + p * 0.25, "Sacando el eco de la sala… ${(p * 100).toInt()} %")
+                else -> avance(0.76, "Ecualizando y ajustando el volumen…")
+            }
         }
         val despues = Dsp.spread(Dsp.envelope(x, 900))
 
         // 4) Codificar en AAC
-        val cod = codificar(x, mono.rate) { p -> avance(0.78 + p * 0.10, "Codificando el audio nuevo… ${(p * 100).toInt()} %") }
+        val cod = codificar(x, 48000) { p -> avance(0.78 + p * 0.10, "Codificando el audio nuevo… ${(p * 100).toInt()} %") }
 
         // 5) Armar el video nuevo
         val nombre = nombreSalida(nombreOriginal)

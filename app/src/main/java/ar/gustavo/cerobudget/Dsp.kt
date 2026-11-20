@@ -5,6 +5,7 @@ import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.floor
+import kotlin.math.ln
 import kotlin.math.log10
 import kotlin.math.max
 import kotlin.math.min
@@ -124,68 +125,82 @@ object Dsp {
         }
     }
 
-    // ---------- Reducción de ruido espectral ----------
-    fun denoise(x: FloatArray, fs: Int, strength: String, progress: (Double) -> Unit) {
-        val (over, floorG) = when (strength) {
-            "suave" -> 1.0 to 0.32
-            "fuerte" -> 2.2 to 0.08
-            else -> 1.5 to 0.16
-        }
-        val n = if (fs >= 32000) 1024 else 512
-        val hop = n / 4; val h = n / 2 + 1
+    // ---------- Intensidades ----------
+    class Nivel(val over: Double, val piso: Double, val rev: Double, val puertaDb: Double, val rango: Double)
+
+    fun nivel(clave: String) = when (clave) {
+        "normal" -> Nivel(1.0, 0.25, 0.7, 32.0, 18.0)
+        "fuerte" -> Nivel(1.5, 0.12, 1.1, 28.0, 30.0)
+        else -> Nivel(2.0, 0.06, 1.6, 24.0, 45.0) // máxima
+    }
+
+    // ---------- Ruido residual + reverberación (eco de la sala) ----------
+    // Interferencia = ruido de fondo + reverberación tardía estimada (método de Lebart):
+    // la potencia de hace 50 ms, atenuada según un tiempo de reverberación de 0,6 s.
+    fun dereverb(x: FloatArray, fs: Int, nv: Nivel, progress: (Double) -> Unit) {
+        val n = 1024; val hop = 256; val h = n / 2 + 1
         val fft = Fft(n)
         val w = DoubleArray(n) { sqrt(0.5 - 0.5 * cos(2 * PI * it / n)) }
         val re = DoubleArray(n); val im = DoubleArray(n)
         val len = x.size
 
-        // 1) Perfil de ruido: el 10 % de los cuadros más silenciosos
+        // Perfil de ruido: el 10 % de los cuadros más silenciosos
+        val noise = DoubleArray(h)
         val energies = ArrayList<DoubleArray>()
         var t0 = 0
         while (t0 + n <= len) {
             var e = 0.0
             for (i in 0 until n) { val v = x[t0 + i] * w[i]; e += v * v }
-            if (e > 1e-9) energies.add(doubleArrayOf(e, t0.toDouble()))
+            if (e > 1e-12) energies.add(doubleArrayOf(e, t0.toDouble()))
             t0 += n
         }
-        if (energies.size < 4) return
-        val sorted = energies.map { it[0] }.sorted()
-        val thr = sorted[max(0, (sorted.size * 0.1).toInt() - 1)]
-        val quiet = energies.filter { it[0] <= thr }
-        val stride = max(1, quiet.size / 1500)
-        val noise = DoubleArray(h); var nq = 0
-        var q = 0
-        while (q < quiet.size) {
-            val t = quiet[q][1].toInt()
-            for (i in 0 until n) { re[i] = x[t + i] * w[i]; im[i] = 0.0 }
-            fft.run(re, im, false)
-            for (b in 0 until h) noise[b] += re[b] * re[b] + im[b] * im[b]
-            nq++; q += stride
+        if (energies.size >= 4) {
+            val sorted = energies.map { it[0] }.sorted()
+            val thr = sorted[max(0, (sorted.size * 0.1).toInt() - 1)]
+            val quiet = energies.filter { it[0] <= thr }
+            val stride = max(1, quiet.size / 1500)
+            var nq = 0; var q = 0
+            while (q < quiet.size) {
+                val t = quiet[q][1].toInt()
+                for (i in 0 until n) { re[i] = x[t + i] * w[i]; im[i] = 0.0 }
+                fft.run(re, im, false)
+                for (b in 0 until h) noise[b] += re[b] * re[b] + im[b] * im[b]
+                nq++; q += stride
+            }
+            for (b in 0 until h) noise[b] /= nq
         }
-        for (b in 0 until h) noise[b] = max(noise[b] / nq, 1e-12) * over
+        for (b in 0 until h) noise[b] = max(noise[b], 1e-14) * nv.over
 
-        // 2) Filtrado (Wiener con SNR a priori "decision-directed")
-        val acc = DoubleArray(n); val g = DoubleArray(h); val gs = DoubleArray(h); val prevS = DoubleArray(h)
-        val beta = 0.96
+        val t60 = 0.6; val td = 0.05
+        val nd = max(1, (td * fs / hop).roundToInt())
+        val decay = exp(-2 * (3 * ln(10.0) / t60) * td) * nv.rev
+        val hist = Array(nd + 1) { DoubleArray(h) }
+        var hi = 0
+        val sm = DoubleArray(h)
+        val acc = DoubleArray(n); val g = DoubleArray(h); val prevS = DoubleArray(h)
+        val beta = 0.97
         val total = (len + n) / hop + 1
         var frame = 0
         var t = -(n - hop)
         while (t < len) {
             for (i in 0 until n) { val j = t + i; re[i] = (if (j in 0 until len) x[j].toDouble() else 0.0) * w[i]; im[i] = 0.0 }
             fft.run(re, im, false)
+            val old = hist[(hi + 1) % (nd + 1)]
             for (b in 0 until h) {
-                val p = re[b] * re[b] + im[b] * im[b]
-                val post = p / noise[b]
-                val xi = beta * prevS[b] / noise[b] + (1 - beta) * max(post - 1, 0.0)
-                g[b] = max(xi / (1 + xi), floorG)
+                val pw = re[b] * re[b] + im[b] * im[b]
+                sm[b] = 0.6 * sm[b] + 0.4 * pw
+                val inter = noise[b] + decay * old[b] + 1e-14
+                val post = pw / inter
+                val xi = beta * prevS[b] / inter + (1 - beta) * max(post - 1, 0.0)
+                g[b] = max(xi / (1 + xi), nv.piso)
             }
+            hi = (hi + 1) % (nd + 1)
+            System.arraycopy(sm, 0, hist[hi], 0, h)
             for (b in 0 until h) {
-                val gg = if (b == 0 || b == h - 1) g[b] else 0.25 * g[b - 1] + 0.5 * g[b] + 0.25 * g[b + 1]
-                gs[b] = gg
+                val gg = if (b > 1 && b < h - 2) (g[b - 2] + 2 * g[b - 1] + 3 * g[b] + 2 * g[b + 1] + g[b + 2]) / 9 else g[b]
                 prevS[b] = gg * gg * (re[b] * re[b] + im[b] * im[b])
-            }
-            for (b in 0 until h) {
-                re[b] *= gs[b]; im[b] *= gs[b]
-                if (b > 0 && b < h - 1) { re[n - b] *= gs[b]; im[n - b] *= gs[b] }
+                re[b] *= gg; im[b] *= gg
+                if (b > 0 && b < h - 1) { re[n - b] *= gg; im[n - b] *= gg }
             }
             fft.run(re, im, true)
             for (i in 0 until n) acc[i] += re[i] / n * w[i] * 0.5
@@ -194,6 +209,29 @@ object Dsp {
             java.util.Arrays.fill(acc, n - hop, n, 0.0)
             if (++frame % 4000 == 0) progress(frame.toDouble() / total)
             t += hop
+        }
+    }
+
+    // ---------- Puerta: baja lo que queda entre frases (colas de eco y ruido) ----------
+    fun gate(x: FloatArray, fs: Int, nv: Nivel) {
+        val n = x.size; val win = (0.01 * fs).roundToInt()
+        val dbs = ArrayList<Double>(); var s = 0.0
+        for (i in 0 until n) { s += x[i] * x[i]; if ((i + 1) % win == 0) { dbs.add(10 * log10(s / win + 1e-12)); s = 0.0 } }
+        if (dbs.isEmpty()) return
+        val sorted = dbs.sorted()
+        val thr = sorted[(sorted.size * 0.95).toInt().coerceAtMost(sorted.size - 1)] - nv.puertaDb
+        val att = exp(-1 / (0.002 * fs)); val rel = exp(-1 / (0.12 * fs)); val hold = (0.08 * fs).roundToInt()
+        val ea = exp(-1 / (0.005 * fs)); val er = exp(-1 / (0.03 * fs))
+        var env = 0.0; var g = 1.0; var hcount = 0
+        for (i in 0 until n) {
+            val v = x[i].toDouble() * x[i]
+            env = if (v > env) ea * env + (1 - ea) * v else er * env + (1 - er) * v
+            val lv = 10 * log10(env + 1e-12)
+            val target = if (lv >= thr) { hcount = hold; 1.0 }
+                else if (hcount > 0) { hcount--; 1.0 }
+                else 10.0.pow(-min(nv.rango, (thr - lv) * 3) / 20)
+            g = if (target > g) att * g + (1 - att) * target else rel * g + (1 - rel) * target
+            x[i] = (x[i] * g).toFloat()
         }
     }
 
@@ -256,17 +294,18 @@ object Dsp {
         return db[(db.size * 0.95).toInt().coerceAtMost(db.size - 1)] - db[(db.size * 0.08).toInt()]
     }
 
-    /** Cadena completa. Devuelve el volumen final en LUFS. */
-    fun process(x: FloatArray, fs: Int, strength: String, progress: (String, Double) -> Unit): Double {
-        val f = fs.toDouble()
+    /** Cadena completa (x a 48 kHz). Devuelve el volumen final en LUFS. */
+    fun process(x: FloatArray, fs: Int, clave: String, progress: (String, Double) -> Unit): Double {
+        val f = fs.toDouble(); val nv = nivel(clave)
         biquad(x, hpf(80.0, 0.707, f)); biquad(x, hpf(80.0, 0.707, f))
-        biquad(x, peak(250.0, 1.0, -2.0, f))
-        denoise(x, fs, strength) { progress("ruido", it) }
+        Rnn.limpiar(x) { progress("rnn", it) }
+        dereverb(x, fs, nv) { progress("eco", it) }
         progress("eq", 0.0)
-        biquad(x, peak(3200.0, 0.9, 3.0, f))
-        biquad(x, hshelf(9000.0, 0.707, 1.5, f))
+        biquad(x, peak(300.0, 1.0, -3.0, f))
+        biquad(x, peak(3000.0, 0.9, 2.0, f))
         var l = lufs(x, fs); gain(x, min(30.0, -20 - l))
-        compress(x, fs, -24.0, 2.5)
+        gate(x, fs, nv)
+        compress(x, fs, -22.0, 2.0)
         l = lufs(x, fs); gain(x, min(20.0, -14 - l))
         limit(x, fs, -1.5)
         return lufs(x, fs)
