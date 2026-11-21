@@ -4,19 +4,15 @@ plugins {
 }
 
 android {
-    namespace = "ar.gustavo.cerobudget"
+    namespace = "ar.gustavo.pruebaproxy"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "ar.gustavo.cerobudget"
+        applicationId = "ar.gustavo.pruebaproxy"
         minSdk = 29
         targetSdk = 34
         versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
-        versionName = "0.2." + (System.getenv("GITHUB_RUN_NUMBER") ?: "0")
-        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
-    }
-    externalNativeBuild {
-        cmake { path = file("src/main/cpp/CMakeLists.txt") }
+        versionName = "0.1." + (System.getenv("GITHUB_RUN_NUMBER") ?: "0")
     }
 
     // Firma fija: así cada versión nueva se instala encima de la anterior
@@ -46,4 +42,13 @@ android {
         checkReleaseBuilds = false
         abortOnError = false
     }
+}
+
+dependencies {
+    val media3 = "1.5.1"
+    implementation("androidx.media3:media3-common:$media3")
+    implementation("androidx.media3:media3-exoplayer:$media3")
+    implementation("androidx.media3:media3-ui:$media3")
+    implementation("androidx.media3:media3-transformer:$media3")
+    implementation("androidx.media3:media3-effect:$media3")
 }

@@ -1,8 +1,8 @@
-name: Compilar APK
+name: Compilar Prueba Proxy
 
 on:
   push:
-    branches: [ main ]
+    branches: [ prueba-proxy ]
   workflow_dispatch:
 
 permissions:
@@ -23,12 +23,13 @@ jobs:
       - name: Compilar
         run: gradle :app:assembleRelease --no-daemon --stacktrace
       - name: Renombrar
-        run: cp app/build/outputs/apk/release/app-release.apk 0-Presupuesto-Editor.apk
-      - name: Publicar en la versión "ultima"
+        run: cp app/build/outputs/apk/release/app-release.apk Prueba-Proxy.apk
+      - name: Publicar en la versión "prueba-proxy"
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ultima
-          name: 0 Presupuesto Editor - última versión
-          files: 0-Presupuesto-Editor.apk
+          tag_name: prueba-proxy
+          target_commitish: ${{ github.sha }}
+          name: Prueba Proxy - última versión
+          files: Prueba-Proxy.apk
           body: "versionCode=${{ github.run_number }}"
-          make_latest: true
+          make_latest: false

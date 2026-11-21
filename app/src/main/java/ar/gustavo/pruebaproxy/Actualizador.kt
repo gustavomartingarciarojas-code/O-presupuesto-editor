@@ -1,4 +1,4 @@
-package ar.gustavo.cerobudget
+package ar.gustavo.pruebaproxy
 
 import android.app.PendingIntent
 import android.content.Context
@@ -8,10 +8,10 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-/** Busca la versión "ultima" en GitHub y la instala encima de la actual. */
+/** Busca la versión "prueba-proxy" en GitHub y la instala encima de la actual. */
 object Actualizador {
-    const val ACCION = "ar.gustavo.cerobudget.INSTALAR"
-    private const val API = "https://api.github.com/repos/gustavomartingarciarojas-code/O-presupuesto-editor/releases/tags/ultima"
+    const val ACCION = "ar.gustavo.pruebaproxy.INSTALAR"
+    private const val API = "https://api.github.com/repos/gustavomartingarciarojas-code/O-presupuesto-editor/releases/tags/prueba-proxy"
 
     class Info(val version: Int, val url: String)
 
