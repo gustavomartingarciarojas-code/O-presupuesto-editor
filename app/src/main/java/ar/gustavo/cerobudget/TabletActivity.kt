@@ -1,0 +1,914 @@
+package ar.gustavo.cerobudget
+
+import android.app.Activity
+import android.content.Intent
+import android.content.res.ColorStateList
+import android.content.res.Configuration
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.net.Uri
+import android.os.Bundle
+import android.os.Environment
+import android.os.Handler
+import android.os.Looper
+import android.text.InputType
+import android.text.TextUtils
+import android.util.TypedValue
+import android.view.Gravity
+import android.view.KeyEvent
+import android.view.View
+import android.view.ViewGroup
+import android.view.WindowManager
+import android.widget.Button
+import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
+import android.widget.LinearLayout
+import android.widget.ProgressBar
+import android.widget.SeekBar
+import android.widget.TextView
+import androidx.media3.common.C
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.SeekParameters
+import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.PlayerView
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+
+/**
+ * Modo TABLET: el editor. Trabaja con los proxies (copias livianas) que manda el celular.
+ * Al exportar, le manda al celular solo la lista de edición y el celular arma el 4K.
+ */
+class TabletActivity : Activity() {
+
+    private val ui = Ui(this)
+    private val manejador = Handler(Looper.getMainLooper())
+    private val prefs by lazy { getSharedPreferences("tablet", MODE_PRIVATE) }
+
+    // ------------------------------------------------------------------ datos
+    private var ed = Edicion()
+    private val historial = ArrayDeque<Edicion>()
+    private var sel = -1
+    private var clipsCel: List<Clip> = emptyList()
+    private val bajando = mutableMapOf<String, Int>()   // id → % bajado
+    private var pxPorSegundo = 6f
+
+    // ------------------------------------------------------------------ conexión
+    @Volatile private var conectado = false
+    @Volatile private var base = ""
+    private var hiloConexion: Thread? = null
+    @Volatile private var exportando = false
+
+    // ------------------------------------------------------------------ reproducción
+    private var exo: ExoPlayer? = null
+    private var exoMus: ExoPlayer? = null
+    private var indiceAplicado = -1
+    private var arrastrando = false
+
+    // ------------------------------------------------------------------ vistas
+    private lateinit var raiz: LinearLayout
+    private lateinit var marco: AspectRatioFrameLayout
+    private lateinit var vista: PlayerView
+    private lateinit var aviso: TextView
+    private lateinit var tiempo: TextView
+    private lateinit var linea: SeekBar
+    private lateinit var tira: LinearLayout
+    private lateinit var tiraScroll: HorizontalScrollView
+    private lateinit var bPlay: Button
+    private lateinit var ipCampo: EditText
+    private lateinit var conEstado: TextView
+    private lateinit var listaClips: LinearLayout
+    private lateinit var tramoInfo: TextView
+    private val botonesVel = mutableListOf<Pair<Float, Button>>()
+    private lateinit var volBarra: SeekBar
+    private lateinit var volTexto: TextView
+    private lateinit var musNombre: TextView
+    private lateinit var musBarra: SeekBar
+    private lateinit var musTexto: TextView
+    private val botonesFormato = mutableListOf<Pair<String, Button>>()
+    private lateinit var bExportar: Button
+    private lateinit var expBarra: ProgressBar
+    private lateinit var expEstado: TextView
+    private val conTramo = mutableListOf<View>()
+
+    private fun dirProxies() = File(getExternalFilesDir(Environment.DIRECTORY_MOVIES), "proxies-recibidos").apply { mkdirs() }
+    private fun proxyLocal(id: String) = File(dirProxies(), "$id.mp4")
+    private fun musicaLocal() = File(filesDir, "musica-tablet")
+    private fun tieneProxy(id: String): Boolean {
+        val f = proxyLocal(id)
+        val c = clipsCel.firstOrNull { it.id == id }
+        return f.exists() && f.length() > 0 && (c == null || c.proxyBytes == 0L || c.proxyBytes == f.length())
+    }
+    private fun nombreClip(id: String) = clipsCel.firstOrNull { it.id == id }?.nombre ?: "video"
+
+    // ================================================================== ciclo de vida
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        window.decorView.setBackgroundColor(Ui.fondo)
+        try { ed = Edicion.de(JSONObject(prefs.getString("edicion", "{}") ?: "{}")) } catch (_: Exception) { }
+        try {
+            val a = JSONArray(prefs.getString("clips", "[]") ?: "[]")
+            clipsCel = List(a.length()) { Clip.de(a.getJSONObject(it)) }
+        } catch (_: Exception) { }
+        crearReproductores()
+        armar()
+        reconstruir(0)
+        manejador.post(reloj)
+        if (!prefs.getString("ip", "").isNullOrBlank()) conectar()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        conectado = false
+        manejador.removeCallbacksAndMessages(null)
+        exo?.release(); exo = null
+        exoMus?.release(); exoMus = null
+    }
+
+    override fun onPause() {
+        super.onPause()
+        exo?.pause(); exoMus?.pause()
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        armar()
+    }
+
+    // ================================================================== pantalla
+
+    private fun armar() {
+        botonesVel.clear(); botonesFormato.clear(); conTramo.clear()
+        val horizontal = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        raiz = LinearLayout(this).apply { orientation = if (horizontal) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL; setBackgroundColor(Ui.fondo) }
+
+        // ---------------- columna del editor
+        val editor = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(ui.dp(14), ui.dp(12), ui.dp(if (horizontal) 6 else 14), ui.dp(8)) }
+
+        val negro = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
+        marco = AspectRatioFrameLayout(this).apply { resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT }
+        vista = PlayerView(this).apply {
+            useController = false
+            setShutterBackgroundColor(Color.BLACK)
+            setKeepContentOnPlayerReset(true)
+            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+            player = exo
+        }
+        marco.addView(vista, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        negro.addView(marco, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER))
+        aviso = ui.texto("", 15f, Ui.tinta).apply { gravity = Gravity.CENTER; setPadding(ui.dp(24), 0, ui.dp(24), 0) }
+        negro.addView(aviso, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+        negro.setOnClickListener { raiz.requestFocus() }
+        val altoVista = if (horizontal) 0 else (resources.displayMetrics.widthPixels - ui.dp(28)) * 9 / 16
+        editor.addView(negro, if (horizontal) LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+            else LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, altoVista))
+
+        tiempo = ui.texto("00:00,0 / 00:00,0", 16f, Ui.tinta, true).apply { setPadding(0, ui.dp(6), 0, 0) }
+        editor.addView(tiempo, ui.lp())
+        linea = SeekBar(this).apply {
+            progressTintList = ColorStateList.valueOf(Ui.amarillo); thumbTintList = ColorStateList.valueOf(Ui.amarillo)
+            isFocusable = false
+        }
+        editor.addView(linea, ui.lp(2).apply { height = ui.dp(36) })
+
+        val f1 = ui.fila()
+        fun ctrl(fila: LinearLayout, t: String, principal: Boolean, w: Float = 1f, accion: () -> Unit): Button {
+            val b = ui.boton(t, principal, 15f)
+            b.setOnClickListener { accion(); raiz.requestFocus() }
+            fila.addView(b, ui.peso(w))
+            return b
+        }
+        ctrl(f1, "−5 s", false) { mover(-5000) }
+        bPlay = ctrl(f1, "Play", true, 1.3f) { alternar() }
+        ctrl(f1, "+5 s", false) { mover(5000) }
+        ctrl(f1, "Dividir", false) { dividir() }
+        ctrl(f1, "Borrar", false) { borrar() }
+        ctrl(f1, "Duplicar", false) { duplicar() }
+        ctrl(f1, "Deshacer", false) { deshacer() }
+        editor.addView(f1, ui.lp(4))
+
+        val f2 = ui.fila().apply { gravity = Gravity.CENTER_VERTICAL }
+        tiraScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = true; isFocusable = false }
+        tira = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, ui.dp(4), 0, ui.dp(4)) }
+        tiraScroll.addView(tira)
+        f2.addView(tiraScroll, LinearLayout.LayoutParams(0, ui.dp(72), 1f))
+        val zMenos = ui.boton("−", false, 18f); val zMas = ui.boton("+", false, 18f)
+        zMenos.setOnClickListener { pxPorSegundo = (pxPorSegundo / 1.5f).coerceAtLeast(0.5f); dibujarTira() }
+        zMas.setOnClickListener { pxPorSegundo = (pxPorSegundo * 1.5f).coerceAtMost(120f); dibujarTira() }
+        f2.addView(zMenos, LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)).apply { leftMargin = ui.dp(6) })
+        f2.addView(zMas, LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)).apply { leftMargin = ui.dp(4) })
+        editor.addView(f2, ui.lp(6))
+        editor.addView(ui.texto("Teclado: espacio play/pausa · ← → 5 s · S dividir · Supr borrar · D duplicar · Z deshacer", 12f, Ui.gris), ui.lp(2))
+
+        // ---------------- columna de herramientas
+        val (scroll, col) = ui.columnaConScroll()
+        if (horizontal) {
+            col.setPadding(ui.dp(6), ui.dp(12), ui.dp(14), ui.dp(40))
+            raiz.addView(editor, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1.7f))
+            raiz.addView(scroll, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+        } else {
+            raiz.addView(editor, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            raiz.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        }
+
+        // 1 Conexión
+        val b1 = ui.bloque("1  Conexión con el celular")
+        ipCampo = EditText(this).apply {
+            setText(prefs.getString("ip", ""))
+            hint = "dirección que muestra el celular"
+            setHintTextColor(Ui.gris); setTextColor(Ui.tinta)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            isSingleLine = true
+            background = GradientDrawable().apply { cornerRadius = ui.dp(10).toFloat(); setColor(Ui.fondo); setStroke(ui.dp(1), Ui.linea) }
+            setPadding(ui.dp(12), ui.dp(8), ui.dp(12), ui.dp(8))
+        }
+        b1.addView(ipCampo, ui.lp())
+        ipCampo.setOnEditorActionListener { _, _, _ -> raiz.requestFocus(); conectar(); true }
+        val bCon = ui.boton("Conectar", true)
+        bCon.setOnClickListener { raiz.requestFocus(); conectar() }
+        b1.addView(bCon, ui.lp(8))
+        conEstado = ui.texto(if (conectado) "Conectado." else "", 14f, Ui.gris).apply { setPadding(0, ui.dp(6), 0, 0) }
+        b1.addView(conEstado, ui.lp())
+        col.addView(b1, ui.lp())
+
+        // 2 Videos
+        val b2 = ui.bloque("2  Videos del celular")
+        listaClips = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        b2.addView(listaClips, ui.lp())
+        col.addView(b2, ui.lp(10))
+
+        // 3 Tramo elegido
+        val b3 = ui.bloque("3  Tramo elegido")
+        tramoInfo = ui.texto("Tocá un tramo de la línea de tiempo.", 14f, Ui.gris)
+        b3.addView(tramoInfo, ui.lp())
+        b3.addView(ui.texto("Velocidad", 14f, Ui.tinta, true).apply { setPadding(0, ui.dp(10), 0, ui.dp(4)) }, ui.lp())
+        val fv = ui.fila()
+        for (v in listOf(0.5f, 1f, 1.5f, 2f, 3f)) {
+            val t = if (v == 0.5f) "0,5×" else if (v == 1.5f) "1,5×" else "${v.toInt()}×"
+            val b = ui.boton(t, false, 14f)
+            b.setOnClickListener { cambiarTramo { it.copy(vel = v) }; raiz.requestFocus() }
+            fv.addView(b, ui.peso(1f, 2))
+            botonesVel += v to b
+            conTramo += b
+        }
+        b3.addView(fv, ui.lp())
+        volTexto = ui.texto("Volumen: 100 %", 14f, Ui.tinta, true).apply { setPadding(0, ui.dp(10), 0, 0) }
+        b3.addView(volTexto, ui.lp())
+        volBarra = SeekBar(this).apply {
+            max = 200; progress = 100
+            progressTintList = ColorStateList.valueOf(Ui.amarillo); thumbTintList = ColorStateList.valueOf(Ui.amarillo)
+            isFocusable = false
+        }
+        b3.addView(volBarra, ui.lp(2).apply { height = ui.dp(40) })
+        conTramo += volBarra
+        volBarra.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar?, p: Int, delUsuario: Boolean) {
+                if (!delUsuario) return
+                volTexto.text = "Volumen: $p %"
+                cambiarTramo(historia = false, reconstruirPlayer = false) { it.copy(vol = p / 100f) }
+                aplicarItem(true)
+            }
+            override fun onStartTrackingTouch(s: SeekBar?) { guardarHistoria() }
+            override fun onStopTrackingTouch(s: SeekBar?) { guardar(); raiz.requestFocus() }
+        })
+        val fm = ui.fila()
+        val bIzq = ui.boton("◀ Mover", false, 14f); val bDer = ui.boton("Mover ▶", false, 14f)
+        bIzq.setOnClickListener { moverTramo(-1); raiz.requestFocus() }
+        bDer.setOnClickListener { moverTramo(1); raiz.requestFocus() }
+        fm.addView(bIzq, ui.peso(1f, 2)); fm.addView(bDer, ui.peso(1f, 2))
+        conTramo += bIzq; conTramo += bDer
+        b3.addView(fm, ui.lp(8))
+        col.addView(b3, ui.lp(10))
+
+        // 4 Música
+        val b4 = ui.bloque("4  Música")
+        musNombre = ui.texto("", 14f, Ui.gris)
+        b4.addView(musNombre, ui.lp())
+        val fmu = ui.fila()
+        val bElegirMus = ui.boton("Elegir música", false, 14f); val bQuitarMus = ui.boton("Quitar", false, 14f)
+        fmu.addView(bElegirMus, ui.peso(1.4f, 2)); fmu.addView(bQuitarMus, ui.peso(1f, 2))
+        b4.addView(fmu, ui.lp(6))
+        musTexto = ui.texto("", 14f, Ui.tinta, true).apply { setPadding(0, ui.dp(8), 0, 0) }
+        b4.addView(musTexto, ui.lp())
+        musBarra = SeekBar(this).apply {
+            max = 100
+            progressTintList = ColorStateList.valueOf(Ui.amarillo); thumbTintList = ColorStateList.valueOf(Ui.amarillo)
+            isFocusable = false
+        }
+        b4.addView(musBarra, ui.lp(2).apply { height = ui.dp(40) })
+        bElegirMus.setOnClickListener {
+            val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "audio/*" }
+            startActivityForResult(i, 31)
+        }
+        bQuitarMus.setOnClickListener {
+            if (ed.musica.isNotEmpty()) { guardarHistoria(); ed = ed.copy(musica = ""); guardar(); prepararMusica(); refrescarPanel() }
+            raiz.requestFocus()
+        }
+        musBarra.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar?, p: Int, delUsuario: Boolean) {
+                if (!delUsuario) return
+                ed = ed.copy(volMusica = p / 100f)
+                musTexto.text = "Volumen de la música: $p %"
+                exoMus?.volume = ed.volMusica
+            }
+            override fun onStartTrackingTouch(s: SeekBar?) { guardarHistoria() }
+            override fun onStopTrackingTouch(s: SeekBar?) { guardar(); raiz.requestFocus() }
+        })
+        col.addView(b4, ui.lp(10))
+
+        // 5 Formato
+        val b5 = ui.bloque("5  Formato")
+        val ff = ui.fila()
+        for ((clave, t) in listOf("original" to "Original", "9:16" to "9:16", "16:9" to "16:9", "1:1" to "1:1", "4:5" to "4:5")) {
+            val b = ui.boton(t, false, 14f)
+            b.setOnClickListener {
+                if (ed.formato != clave) { guardarHistoria(); ed = ed.copy(formato = clave); guardar(); refrescarPanel() }
+                raiz.requestFocus()
+            }
+            ff.addView(b, ui.peso(if (clave == "original") 1.5f else 1f, 2))
+            botonesFormato += clave to b
+        }
+        b5.addView(ff, ui.lp())
+        b5.addView(ui.texto("9:16 para reels y TikTok. Se exporta en 4K y se recorta al centro.", 13f, Ui.gris).apply { setPadding(0, ui.dp(6), 0, 0) }, ui.lp())
+        col.addView(b5, ui.lp(10))
+
+        // 6 Exportar
+        val b6 = ui.bloque("6  Exportar")
+        b6.addView(ui.texto("El celular arma el video final en 4K con los originales y lo guarda en Movies/0-Presupuesto-Editor.", 13f, Ui.gris).apply { setPadding(0, 0, 0, ui.dp(8)) }, ui.lp())
+        bExportar = ui.boton("Exportar en 4K", true)
+        bExportar.setOnClickListener { raiz.requestFocus(); exportar() }
+        b6.addView(bExportar, ui.lp())
+        expBarra = ui.barra()
+        b6.addView(expBarra, ui.lp(10))
+        expEstado = ui.texto("", 14f, Ui.gris).apply { setPadding(0, ui.dp(6), 0, 0) }
+        b6.addView(expEstado, ui.lp())
+        col.addView(b6, ui.lp(10))
+
+        setContentView(raiz)
+        raiz.isFocusableInTouchMode = true
+        raiz.requestFocus()
+
+        linea.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar?, p: Int, delUsuario: Boolean) { if (delUsuario) irA(p.toLong()) }
+            override fun onStartTrackingTouch(s: SeekBar?) { arrastrando = true; exo?.setSeekParameters(SeekParameters.CLOSEST_SYNC) }
+            override fun onStopTrackingTouch(s: SeekBar?) {
+                arrastrando = false
+                exo?.setSeekParameters(SeekParameters.EXACT)
+                irA(linea.progress.toLong())
+                raiz.requestFocus()
+            }
+        })
+
+        refrescarPanel()
+        refrescarClips()
+    }
+
+    /** Actualiza todo lo que depende de la edición. */
+    private fun refrescarPanel() {
+        if (sel >= ed.segmentos.size) sel = ed.segmentos.size - 1
+        val primero = ed.segmentos.firstOrNull()?.let { s -> clipsCel.firstOrNull { it.id == s.clip } }
+        marco.setAspectRatio(Edicion.proporcion(ed.formato, primero?.ancho ?: 1920, primero?.alto ?: 1080))
+        for ((clave, b) in botonesFormato) ui.marcar(b, clave == ed.formato)
+
+        val s = ed.segmentos.getOrNull(sel)
+        conTramo.forEach { ui.activo(it, s != null) }
+        if (s != null) {
+            tramoInfo.setTextColor(Ui.tinta)
+            tramoInfo.text = "Tramo ${sel + 1} de ${ed.segmentos.size} · ${nombreClip(s.clip)}\n" +
+                "Del ${Datos.reloj(s.ini)} al ${Datos.reloj(s.fin)} del original · dura ${Datos.reloj(s.dura)}"
+            for ((v, b) in botonesVel) ui.marcar(b, v == s.vel)
+            volBarra.progress = (s.vol * 100).toInt()
+            volTexto.text = "Volumen: ${(s.vol * 100).toInt()} %"
+        } else {
+            tramoInfo.setTextColor(Ui.gris)
+            tramoInfo.text = if (ed.segmentos.isEmpty()) "La línea de tiempo está vacía: agregá un video desde la lista." else "Tocá un tramo de la línea de tiempo."
+            for ((_, b) in botonesVel) ui.marcar(b, false)
+        }
+
+        if (ed.musica.isEmpty()) {
+            musNombre.setTextColor(Ui.gris); musNombre.text = "Sin música."
+            musTexto.visibility = View.GONE; musBarra.visibility = View.GONE
+        } else {
+            musNombre.setTextColor(Ui.tinta); musNombre.text = ed.musica
+            musTexto.visibility = View.VISIBLE; musBarra.visibility = View.VISIBLE
+            musBarra.progress = (ed.volMusica * 100).toInt()
+            musTexto.text = "Volumen de la música: ${(ed.volMusica * 100).toInt()} %"
+        }
+        ui.activo(bExportar, ed.segmentos.isNotEmpty() && !exportando)
+        linea.max = ed.total.toInt().coerceAtLeast(1)
+        dibujarTira()
+    }
+
+    private fun dibujarTira() {
+        tira.removeAllViews()
+        val actual = indiceActual()
+        ed.segmentos.forEachIndexed { i, s ->
+            val w = (s.dura / 1000f * pxPorSegundo).toInt().coerceAtLeast(ui.dp(64))
+            val elegido = i == sel
+            val t = TextView(this).apply {
+                text = nombreClip(s.clip).substringBeforeLast('.') + "\n" + Datos.reloj(s.dura) +
+                    (if (s.vel != 1f) " · ${s.vel}×".replace(".0×", "×").replace('.', ',') else "") +
+                    (if (s.vol != 1f) " · ${(s.vol * 100).toInt()} %" else "")
+                setTextColor(if (elegido) Ui.fondo else Ui.tinta)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                maxLines = 2; ellipsize = TextUtils.TruncateAt.END
+                setPadding(ui.dp(8), ui.dp(4), ui.dp(8), ui.dp(4))
+                gravity = Gravity.CENTER_VERTICAL
+                background = GradientDrawable().apply {
+                    cornerRadius = ui.dp(8).toFloat()
+                    setColor(if (elegido) Ui.amarillo else Ui.azul)
+                    setStroke(ui.dp(if (i == actual) 3 else 1), if (i == actual) Ui.tinta else Ui.linea)
+                }
+                setOnClickListener {
+                    sel = i
+                    irA(ed.inicio(i))
+                    refrescarPanel()
+                    raiz.requestFocus()
+                }
+            }
+            tira.addView(t, LinearLayout.LayoutParams(w, ViewGroup.LayoutParams.MATCH_PARENT).apply { rightMargin = ui.dp(3) })
+        }
+        if (ed.segmentos.isEmpty()) tira.addView(ui.texto("Línea de tiempo vacía", 14f, Ui.gris).apply { gravity = Gravity.CENTER_VERTICAL })
+    }
+
+    private fun refrescarClips() {
+        listaClips.removeAllViews()
+        if (clipsCel.isEmpty()) {
+            listaClips.addView(ui.texto(if (conectado) "El celular no tiene videos: agregalos desde el celular." else "Conectate para ver los videos.", 14f, Ui.gris), ui.lp())
+            return
+        }
+        for (c in clipsCel) {
+            val fila = ui.fila().apply { setPadding(0, ui.dp(6), 0, ui.dp(6)); gravity = Gravity.CENTER_VERTICAL }
+            val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            col.addView(ui.texto(c.nombre, 15f, Ui.tinta, true).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.MIDDLE })
+            val listo = tieneProxy(c.id)
+            val estado = when {
+                listo -> "${Datos.duracion(c.duracionMs)} · listo para editar"
+                bajando.containsKey(c.id) -> "Bajando proxy… ${bajando[c.id]} %"
+                c.estado == "armando" -> "El celular arma el proxy… ${c.avance} %"
+                c.estado == "error" -> "Error en el celular: ${c.error}"
+                c.estado == "listo" -> "Proxy listo en el celular, falta bajarlo"
+                else -> "En espera en el celular"
+            }
+            col.addView(ui.texto(estado, 13f, if (listo) Ui.verde else if (c.estado == "error") Ui.rojo else Ui.gris))
+            fila.addView(col, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            val b = ui.boton("Agregar", false, 14f)
+            ui.activo(b, listo)
+            b.setOnClickListener { agregar(c); raiz.requestFocus() }
+            fila.addView(b)
+            listaClips.addView(fila, ui.lp())
+        }
+    }
+
+    // ================================================================== edición
+
+    private fun guardar() {
+        prefs.edit().putString("edicion", ed.json().toString()).apply()
+    }
+
+    private fun guardarHistoria() {
+        historial.addLast(ed)
+        while (historial.size > 60) historial.removeFirst()
+    }
+
+    /** Cambia la edición, la guarda y vuelve a armar la vista previa sin perder la posición. */
+    private fun cambiar(nueva: Edicion, historia: Boolean = true, reconstruirPlayer: Boolean = true) {
+        val t = tiempoActual()
+        if (historia) guardarHistoria()
+        ed = nueva
+        guardar()
+        if (reconstruirPlayer) reconstruir(t.coerceAtMost((ed.total - 1).coerceAtLeast(0)))
+        refrescarPanel()
+    }
+
+    private fun cambiarTramo(historia: Boolean = true, reconstruirPlayer: Boolean = true, f: (Segmento) -> Segmento) {
+        val s = ed.segmentos.getOrNull(sel) ?: return
+        val l = ed.segmentos.toMutableList()
+        l[sel] = f(s)
+        if (historia || reconstruirPlayer) cambiar(ed.copy(segmentos = l), historia, reconstruirPlayer)
+        else { ed = ed.copy(segmentos = l); refrescarTira() }
+    }
+
+    private fun refrescarTira() = dibujarTira()
+
+    private fun agregar(c: Clip) {
+        val l = ed.segmentos.toMutableList()
+        l += Segmento(c.id, 0, c.duracionMs)
+        sel = l.lastIndex
+        val nueva = ed.copy(segmentos = l)
+        cambiar(nueva)
+        irA(nueva.inicio(sel))
+    }
+
+    private fun dividir() {
+        if (ed.segmentos.isEmpty()) return
+        val t = tiempoActual()
+        val (i, dentro) = ed.ubicar(t)
+        val s = ed.segmentos[i]
+        val corte = s.ini + (dentro * s.vel).toLong()
+        if (corte - s.ini < 100 || s.fin - corte < 100) { avisar("Muy cerca del borde del tramo para dividir."); return }
+        val l = ed.segmentos.toMutableList()
+        l[i] = s.copy(fin = corte)
+        l.add(i + 1, s.copy(ini = corte))
+        sel = i + 1
+        cambiar(ed.copy(segmentos = l))
+    }
+
+    private fun borrar() {
+        if (ed.segmentos.isEmpty()) return
+        val i = if (sel in ed.segmentos.indices) sel else ed.ubicar(tiempoActual()).first
+        val inicio = ed.inicio(i)
+        val l = ed.segmentos.toMutableList()
+        l.removeAt(i)
+        sel = if (l.isEmpty()) -1 else i.coerceAtMost(l.lastIndex)
+        cambiar(ed.copy(segmentos = l), reconstruirPlayer = false)
+        reconstruir(inicio.coerceAtMost((ed.total - 1).coerceAtLeast(0)))
+    }
+
+    private fun duplicar() {
+        if (ed.segmentos.isEmpty()) return
+        val i = if (sel in ed.segmentos.indices) sel else ed.ubicar(tiempoActual()).first
+        val l = ed.segmentos.toMutableList()
+        l.add(i + 1, l[i])
+        sel = i + 1
+        val nueva = ed.copy(segmentos = l)
+        cambiar(nueva)
+        irA(nueva.inicio(sel))
+    }
+
+    private fun moverTramo(d: Int) {
+        val j = sel + d
+        if (sel !in ed.segmentos.indices || j !in ed.segmentos.indices) return
+        val l = ed.segmentos.toMutableList()
+        val tmp = l[sel]; l[sel] = l[j]; l[j] = tmp
+        sel = j
+        val nueva = ed.copy(segmentos = l)
+        cambiar(nueva)
+        irA(nueva.inicio(sel))
+    }
+
+    private fun deshacer() {
+        val previa = historial.removeLastOrNull() ?: run { avisar("No hay nada para deshacer."); return }
+        val t = tiempoActual()
+        ed = previa
+        guardar()
+        reconstruir(t.coerceAtMost((ed.total - 1).coerceAtLeast(0)))
+        prepararMusica()
+        refrescarPanel()
+    }
+
+    private fun avisar(msg: String) {
+        tiempo.text = msg
+        manejador.postDelayed({ actualizarTiempo() }, 1800)
+    }
+
+    // ================================================================== reproducción
+
+    private fun crearReproductores() {
+        val p = ExoPlayer.Builder(this).build()
+        p.setSeekParameters(SeekParameters.EXACT)
+        p.addListener(object : Player.Listener {
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) { aplicarItem(false) }
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                bPlay.text = if (isPlaying) "Pausa" else "Play"
+                sincronizarMusica(isPlaying)
+                if (isPlaying) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state == Player.STATE_ENDED) exoMus?.pause()
+            }
+            override fun onPlayerError(error: PlaybackException) {
+                aviso.text = "La vista previa falló: ${error.errorCodeName}"
+            }
+        })
+        exo = p
+        exoMus = ExoPlayer.Builder(this).build().apply { repeatMode = Player.REPEAT_MODE_ALL }
+        prepararMusica()
+    }
+
+    private fun prepararMusica() {
+        val m = exoMus ?: return
+        m.stop(); m.clearMediaItems()
+        val f = musicaLocal()
+        if (ed.musica.isNotEmpty() && f.exists()) {
+            m.setMediaItem(MediaItem.fromUri(Uri.fromFile(f)))
+            m.prepare()
+            m.volume = ed.volMusica
+            if (exo?.isPlaying == true) sincronizarMusica(true)
+        }
+    }
+
+    private fun sincronizarMusica(tocando: Boolean) {
+        val m = exoMus ?: return
+        if (ed.musica.isEmpty() || m.mediaItemCount == 0) { m.pause(); return }
+        if (!tocando) { m.pause(); return }
+        val d = m.duration
+        val t = tiempoActual()
+        m.seekTo(if (d != C.TIME_UNSET && d > 0) t % d else t)
+        m.volume = ed.volMusica
+        m.play()
+    }
+
+    /** Vuelve a cargar la lista de tramos en el reproductor y se para en el momento t de la línea de tiempo. */
+    private fun reconstruir(t: Long) {
+        val p = exo ?: return
+        indiceAplicado = -1
+        if (ed.segmentos.isEmpty()) {
+            p.clearMediaItems()
+            aviso.text = "Agregá un video desde la lista de la derecha."
+            return
+        }
+        val faltan = ed.segmentos.map { it.clip }.distinct().filter { !tieneProxy(it) }
+        if (faltan.isNotEmpty()) {
+            p.clearMediaItems()
+            aviso.text = "Falta bajar el proxy de: " + faltan.joinToString(", ") { nombreClip(it) } + ".\nConectate con el celular."
+            return
+        }
+        aviso.text = ""
+        val items = ed.segmentos.map { s ->
+            MediaItem.Builder()
+                .setUri(Uri.fromFile(proxyLocal(s.clip)))
+                .setClippingConfiguration(MediaItem.ClippingConfiguration.Builder().setStartPositionMs(s.ini).setEndPositionMs(s.fin).build())
+                .build()
+        }
+        val (i, dentro) = ed.ubicar(t)
+        val estaba = p.isPlaying
+        p.setMediaItems(items, i, (dentro * ed.segmentos[i].vel).toLong())
+        p.prepare()
+        aplicarItem(true)
+        if (!estaba) p.pause()
+    }
+
+    /** Aplica la velocidad y el volumen del tramo que está sonando. */
+    private fun aplicarItem(forzar: Boolean) {
+        val p = exo ?: return
+        val i = p.currentMediaItemIndex
+        if (!forzar && i == indiceAplicado) return
+        val s = ed.segmentos.getOrNull(i) ?: return
+        indiceAplicado = i
+        p.setPlaybackSpeed(s.vel)
+        p.volume = s.vol.coerceAtMost(1f)
+    }
+
+    private fun indiceActual(): Int = exo?.currentMediaItemIndex ?: -1
+
+    private fun tiempoActual(): Long {
+        val p = exo ?: return 0
+        if (p.mediaItemCount == 0) return 0
+        val i = p.currentMediaItemIndex
+        val s = ed.segmentos.getOrNull(i) ?: return 0
+        return ed.inicio(i) + (p.currentPosition / s.vel).toLong()
+    }
+
+    private fun irA(t: Long) {
+        val p = exo ?: return
+        if (p.mediaItemCount == 0 || ed.segmentos.isEmpty()) return
+        val (i, dentro) = ed.ubicar(t.coerceIn(0, ed.total))
+        p.seekTo(i, (dentro * ed.segmentos[i].vel).toLong())
+        aplicarItem(true)
+        if (p.isPlaying) sincronizarMusica(true)
+    }
+
+    private fun alternar() {
+        val p = exo ?: return
+        if (p.mediaItemCount == 0) return
+        p.setSeekParameters(SeekParameters.EXACT)
+        if (p.isPlaying) p.pause() else {
+            if (p.playbackState == Player.STATE_ENDED) irA(0)
+            p.play()
+        }
+    }
+
+    private fun mover(ms: Long) = irA(tiempoActual() + ms)
+
+    private fun actualizarTiempo() {
+        val total = ed.total
+        val t = tiempoActual()
+        tiempo.text = "${Datos.reloj(t)} / ${Datos.reloj(total)}"
+        if (!arrastrando) linea.progress = t.toInt()
+    }
+
+    private var ultimoIndiceTira = -2
+
+    private val reloj = object : Runnable {
+        override fun run() {
+            if (exo != null) {
+                aplicarItem(false)
+                actualizarTiempo()
+                val i = indiceActual()
+                if (i != ultimoIndiceTira) { ultimoIndiceTira = i; dibujarTira() }
+            }
+            manejador.postDelayed(this, 150)
+        }
+    }
+
+    // ================================================================== teclado
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (currentFocus !is EditText && event.action == KeyEvent.ACTION_DOWN) {
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_SPACE -> { alternar(); return true }
+                KeyEvent.KEYCODE_DPAD_LEFT -> { mover(if (event.isShiftPressed) -1000 else -5000); return true }
+                KeyEvent.KEYCODE_DPAD_RIGHT -> { mover(if (event.isShiftPressed) 1000 else 5000); return true }
+                KeyEvent.KEYCODE_S, KeyEvent.KEYCODE_B -> { dividir(); return true }
+                KeyEvent.KEYCODE_FORWARD_DEL, KeyEvent.KEYCODE_DEL -> { borrar(); return true }
+                KeyEvent.KEYCODE_D -> { duplicar(); return true }
+                KeyEvent.KEYCODE_Z -> { deshacer(); return true }
+                KeyEvent.KEYCODE_MOVE_HOME -> { irA(0); return true }
+            }
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    // ================================================================== música
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != 31 || resultCode != RESULT_OK) return
+        val u = data?.data ?: return
+        val (nombre, _) = Datos.nombreDe(this, u)
+        try {
+            contentResolver.openInputStream(u)?.use { inp -> musicaLocal().outputStream().use { inp.copyTo(it) } }
+                ?: throw IllegalStateException("No se pudo leer el archivo.")
+            guardarHistoria()
+            ed = ed.copy(musica = nombre)
+            guardar()
+            prepararMusica()
+            refrescarPanel()
+        } catch (e: Exception) {
+            musNombre.setTextColor(Ui.rojo)
+            musNombre.text = "No pude copiar la música: ${e.message}"
+        }
+    }
+
+    // ================================================================== conexión con el celular
+
+    private fun abrir(url: String, timeout: Int = 30_000): HttpURLConnection {
+        val c = URL(url).openConnection() as HttpURLConnection
+        c.connectTimeout = 6_000
+        c.readTimeout = timeout
+        return c
+    }
+
+    private fun conectar() {
+        var dir = ipCampo.text.toString().trim().removePrefix("http://").trimEnd('/')
+        if (dir.isEmpty()) { conEstado.setTextColor(Ui.rojo); conEstado.text = "Escribí la dirección que muestra el celular."; return }
+        prefs.edit().putString("ip", dir).apply()
+        if (!dir.contains(":")) dir += ":${Servidor.PUERTO}"
+        base = "http://$dir"
+        conEstado.setTextColor(Ui.gris)
+        conEstado.text = "Conectando…"
+        if (hiloConexion?.isAlive == true) return
+        conectado = true
+        hiloConexion = Thread { bucleConexion() }.apply { start() }
+    }
+
+    /** Mientras la pantalla esté abierta: consulta el celular y baja los proxies nuevos. */
+    private fun bucleConexion() {
+        var fallos = 0
+        while (conectado) {
+            try {
+                val txt = abrir("$base/info", 8_000).inputStream.bufferedReader().use { it.readText() }
+                val a = JSONObject(txt).getJSONArray("clips")
+                val lista = List(a.length()) { Clip.de(a.getJSONObject(it)) }
+                fallos = 0
+                runOnUiThread {
+                    clipsCel = lista
+                    prefs.edit().putString("clips", a.toString()).apply()
+                    conEstado.setTextColor(Ui.verde)
+                    conEstado.text = "Conectado con el celular."
+                    refrescarClips()
+                }
+                for (c in lista) {
+                    if (!conectado) break
+                    if (c.estado == "listo" && !(proxyLocal(c.id).exists() && proxyLocal(c.id).length() == c.proxyBytes)) bajarProxy(c)
+                }
+            } catch (e: Exception) {
+                fallos++
+                runOnUiThread {
+                    conEstado.setTextColor(Ui.rojo)
+                    conEstado.text = "No encuentro el celular (${e.message ?: "sin respuesta"}). Revisá que tenga abierta la app en modo Celular y que estén en el mismo Wi-Fi."
+                }
+            }
+            try { Thread.sleep(if (fallos == 0) 3_000L else 6_000L) } catch (_: InterruptedException) { break }
+        }
+    }
+
+    private fun bajarProxy(c: Clip) {
+        val destino = proxyLocal(c.id)
+        val tmp = File(destino.path + ".parcial")
+        try {
+            val con = abrir("$base/proxy?id=${URLEncoder.encode(c.id, "UTF-8")}")
+            if (con.responseCode != 200) throw IllegalStateException("el celular respondió ${con.responseCode}")
+            val total = con.contentLengthLong
+            var bajados = 0L
+            var ultimo = -1
+            con.inputStream.use { inp ->
+                tmp.outputStream().use { out ->
+                    val buf = ByteArray(256 * 1024)
+                    while (true) {
+                        val n = inp.read(buf)
+                        if (n < 0) break
+                        out.write(buf, 0, n)
+                        bajados += n
+                        if (total > 0) {
+                            val p = (bajados * 100 / total).toInt()
+                            if (p != ultimo && p % 5 == 0) { ultimo = p; runOnUiThread { bajando[c.id] = p; refrescarClips() } }
+                        }
+                    }
+                }
+            }
+            con.disconnect()
+            if (total > 0 && bajados != total) throw IllegalStateException("llegó incompleto")
+            destino.delete()
+            tmp.renameTo(destino)
+            runOnUiThread {
+                bajando.remove(c.id)
+                refrescarClips()
+                // Si la línea de tiempo esperaba este proxy, se arma la vista previa
+                if (exo?.mediaItemCount == 0 && ed.segmentos.isNotEmpty()) reconstruir(0)
+            }
+        } catch (e: Exception) {
+            tmp.delete()
+            runOnUiThread { bajando.remove(c.id); refrescarClips() }
+        }
+    }
+
+    // ================================================================== exportar
+
+    private fun exportar() {
+        if (exportando || ed.segmentos.isEmpty()) return
+        if (base.isEmpty()) { expEstado.setTextColor(Ui.rojo); expEstado.text = "Primero conectate con el celular."; return }
+        exportando = true
+        exo?.pause()
+        ui.activo(bExportar, false)
+        expBarra.visibility = View.VISIBLE; expBarra.progress = 0
+        expEstado.setTextColor(Ui.gris)
+        expEstado.text = "Mandando la edición al celular…"
+        val edicion = ed
+        Thread {
+            try {
+                val conMusica = edicion.musica.isNotEmpty() && musicaLocal().exists()
+                if (conMusica) {
+                    runOnUiThread { expEstado.text = "Mandando la música al celular…" }
+                    val f = musicaLocal()
+                    val c = abrir("$base/musica", 60_000)
+                    c.requestMethod = "POST"; c.doOutput = true
+                    c.setFixedLengthStreamingMode(f.length())
+                    c.outputStream.use { o -> f.inputStream().use { it.copyTo(o) } }
+                    if (c.responseCode != 200) throw IllegalStateException("el celular no recibió la música (${c.responseCode})")
+                    c.disconnect()
+                }
+                val cuerpo = edicion.json().toString().toByteArray(Charsets.UTF_8)
+                val c = abrir("$base/exportar?musica=${if (conMusica) 1 else 0}")
+                c.requestMethod = "POST"; c.doOutput = true
+                c.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                c.setFixedLengthStreamingMode(cuerpo.size)
+                c.outputStream.use { it.write(cuerpo) }
+                if (c.responseCode != 202) {
+                    val msg = try { c.errorStream?.bufferedReader()?.use { it.readText() } } catch (_: Exception) { null }
+                    throw IllegalStateException(msg ?: "el celular respondió ${c.responseCode}")
+                }
+                c.disconnect()
+                // Seguir el avance
+                var fallos = 0
+                while (true) {
+                    Thread.sleep(1_500)
+                    val j = try {
+                        JSONObject(abrir("$base/estado", 8_000).inputStream.bufferedReader().use { it.readText() }).also { fallos = 0 }
+                    } catch (e: Exception) {
+                        if (++fallos > 20) throw IllegalStateException("se perdió la conexión con el celular")
+                        continue
+                    }
+                    val estado = j.optString("estado")
+                    val p = j.optInt("progreso")
+                    val msg = j.optString("mensaje")
+                    runOnUiThread {
+                        expBarra.progress = p * 10
+                        expEstado.setTextColor(when (estado) { "listo" -> Ui.verde; "error" -> Ui.rojo; else -> Ui.gris })
+                        expEstado.text = msg
+                    }
+                    if (estado == "listo" || estado == "error") break
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    expBarra.visibility = View.GONE
+                    expEstado.setTextColor(Ui.rojo)
+                    expEstado.text = "No se pudo exportar: ${e.message ?: e.javaClass.simpleName}"
+                }
+            } finally {
+                runOnUiThread { exportando = false; ui.activo(bExportar, ed.segmentos.isNotEmpty()) }
+            }
+        }.start()
+    }
+}

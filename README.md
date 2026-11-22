@@ -6,4 +6,9 @@ App propia de edición de video para Android (Motorola Edge 70 Fusion y Redmi Pa
 
 La APK se compila sola con GitHub Actions en cada cambio y queda en la versión **ultima** (Releases), archivo `0-Presupuesto-Editor.apk`.
 
-Próximas etapas: 1 base (cortar, dividir, duplicar, velocidad, volumen, música, formato, exportar) · 2 texto, tipografías, stickers, transiciones, máscara · 3 keyframes y filtros de audio · 4 subtítulos, traducción y estabilización · 5 doblaje.
+**Versión 0.4 · Etapa 1 (edición por proxy):**
+- **Celular:** agregás los videos crudos en 4K; arma una copia liviana (proxy 720p) de cada uno y se la pasa a la tablet por Wi-Fi. Al exportar, arma el video final en 4K con los originales.
+- **Tablet:** editor con línea de tiempo: cortar (borrar), dividir, duplicar, mover tramos, velocidad (0,5× a 3×), volumen (0 a 200 %), música de fondo con volumen, formato (original, 9:16, 16:9, 1:1, 4:5), deshacer y exportar.
+- Solo viaja la lista de edición (unos KB): los videos pesados no salen del celular.
+
+Próximas etapas: 2 texto, tipografías, stickers, transiciones, máscara · 3 keyframes y filtros de audio · 4 subtítulos, traducción y estabilización · 5 doblaje.
