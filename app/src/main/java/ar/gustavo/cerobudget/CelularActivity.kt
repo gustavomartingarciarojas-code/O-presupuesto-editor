@@ -92,7 +92,7 @@ class CelularActivity : Activity(), Servidor.Rutas {
         val b0 = ui.bloque("Dirección para la tablet")
         direccion = ui.texto("—", 30f, Ui.amarillo, true).apply { setTextIsSelectable(true) }
         b0.addView(direccion, ui.lp())
-        aviso = ui.texto("Los dos equipos en el mismo Wi-Fi. Dejá esta pantalla abierta mientras trabajás.", 14f, Ui.gris).apply { setPadding(0, ui.dp(4), 0, 0) }
+        aviso = ui.texto("Los dos equipos en el mismo Wi-Fi. Dejá esta pantalla abierta mientras trabajás: queda prendida sola.", 14f, Ui.gris).apply { setPadding(0, ui.dp(4), 0, 0) }
         b0.addView(aviso, ui.lp())
         col.addView(b0, ui.lp())
 
@@ -251,9 +251,9 @@ class CelularActivity : Activity(), Servidor.Rutas {
         siguienteProxy()
     }
 
+    /** La pantalla queda prendida mientras esté abierto el modo Celular: así no se corta el Wi-Fi con la tablet. */
     private fun pantallaPrendida() {
-        if (tProxy != null || tFinal != null) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
     private val holder = ProgressHolder()
