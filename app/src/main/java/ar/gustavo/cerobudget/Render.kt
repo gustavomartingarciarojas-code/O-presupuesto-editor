@@ -48,7 +48,7 @@ object Render {
         private val hasta = t.fin * 1000
         private val ax = (t.x * 2f - 1f).coerceIn(-1f, 1f)
         private val ay = (1f - t.y * 2f).coerceIn(-1f, 1f)
-        private val visible = OverlaySettings.Builder().setBackgroundFrameAnchor(ax, ay).build()
+        private val visible = OverlaySettings.Builder().setBackgroundFrameAnchor(ax, ay).setScale(t.ax, t.ay).build()
         private val oculto = OverlaySettings.Builder().setBackgroundFrameAnchor(ax, ay).setAlphaScale(0f).build()
         override fun getBitmap(presentationTimeUs: Long): Bitmap = bmp
         override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings {
@@ -57,7 +57,7 @@ object Render {
             val k = t.pos(presentationTimeUs / 1000)
             return OverlaySettings.Builder()
                 .setBackgroundFrameAnchor((k.x * 2f - 1f).coerceIn(-1f, 1f), (1f - k.y * 2f).coerceIn(-1f, 1f))
-                .setScale(k.esc, k.esc)
+                .setScale(k.escX, k.escY)
                 .build()
         }
     }

@@ -19,4 +19,6 @@ La APK se compila sola con GitHub Actions en cada cambio y queda en la versión 
 
 **Línea de tiempo tipo CapCut:** cabezal fijo en el centro, pistas propias para cada texto o sticker (con manijas de inicio y fin) y para la música, y los keyframes como diamantes sobre cada pista. El botón ◆ (junto a Deshacer) agrega o quita el keyframe en el cabezal para lo que esté elegido. Sobre el video: un dedo mueve, dos dedos agrandan o achican; si el elemento ya tiene keyframes, el cambio crea el siguiente solo.
 
+**Caja con 8 nodos:** el texto o sticker elegido muestra su caja con 4 esquinas (escalan parejo) y 4 nodos en el medio de cada lado (estiran solo el ancho o solo el alto). Se usan con el dedo o con el mouse, y también quedan en los keyframes. Con el mouse, la ruedita acerca o aleja la línea de tiempo.
+
 Próximas etapas: 3b filtros de audio en el editor · 3 keyframes y filtros de audio · 4 subtítulos, traducción y estabilización · 5 doblaje.

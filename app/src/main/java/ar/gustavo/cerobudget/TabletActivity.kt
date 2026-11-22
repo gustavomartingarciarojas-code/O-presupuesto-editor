@@ -87,6 +87,7 @@ class TabletActivity : Activity() {
     private lateinit var marco: AspectRatioFrameLayout
     private lateinit var vista: PlayerView
     private lateinit var capaTextos: FrameLayout
+    private lateinit var manijas: Manijas
     private lateinit var velo: View
     private val botonesTrans = mutableListOf<Pair<String, Button>>()
     private lateinit var panelTexto: LinearLayout
@@ -205,6 +206,8 @@ class TabletActivity : Activity() {
         marco.addView(capaMascara, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         capaTextos = FrameLayout(this)
         marco.addView(capaTextos, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        manijas = Manijas(this, ui)
+        marco.addView(manijas, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         velo = View(this).apply { setBackgroundColor(Color.BLACK); alpha = 0f; isClickable = false }
         marco.addView(velo, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         capaTextos.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, orr, ob -> if (r - l != orr - ol || b - t != ob - ot) manejador.post { dibujarTextos(true) } }
@@ -936,7 +939,7 @@ class TabletActivity : Activity() {
         panelTexto.addView(fp, ui.lp(4))
         panelTexto.addView(ui.texto("Animación", 14f, Ui.tinta, true).apply { setPadding(0, ui.dp(10), 0, ui.dp(4)) }, ui.lp())
         val bKtT = ui.boton("Quitar todos los ◆", false, 13f)
-        bKtT.setOnClickListener { cambiarTexto { tx -> val k = tx.pos(tiempoActual()); tx.copy(kf = emptyList(), x = k.x, y = k.y, tam = (tx.tam * k.esc).coerceIn(0.01f, 1.5f)) } }
+        bKtT.setOnClickListener { cambiarTexto { tx -> val k = tx.pos(tiempoActual()); tx.copy(kf = emptyList(), x = k.x, y = k.y, tam = (tx.tam * k.esc).coerceIn(0.01f, 1.5f), ax = k.sx, ay = k.sy) } }
         panelTexto.addView(bKtT, ui.lp())
         kfTextoInfo = ui.texto("", 13f, Ui.gris).apply { setPadding(0, ui.dp(4), 0, 0) }
         panelTexto.addView(kfTextoInfo, ui.lp())
@@ -1160,7 +1163,7 @@ class TabletActivity : Activity() {
                 val cerca = tx.kf.minByOrNull { kotlin.math.abs(it.t - t) }
                 if (cerca != null && kotlin.math.abs(cerca.t - t) <= tol) {
                     // Al quitar el último, el sticker queda como estaba en ese keyframe
-                    if (tx.kf.size == 1) tx.copy(kf = emptyList(), x = cerca.x, y = cerca.y, tam = (tx.tam * cerca.esc).coerceIn(0.01f, 1.5f))
+                    if (tx.kf.size == 1) tx.copy(kf = emptyList(), x = cerca.x, y = cerca.y, tam = (tx.tam * cerca.esc).coerceIn(0.01f, 1.5f), ax = cerca.sx, ay = cerca.sy)
                     else tx.copy(kf = tx.kf - cerca)
                 } else kfTextoEn(tx, t) { it }
             }
@@ -1316,6 +1319,7 @@ class TabletActivity : Activity() {
         val ids = ed.textos.map { it.id }.toSet()
         vistasRotulos.keys.filter { it !in ids }.forEach { capaTextos.removeView(vistasRotulos.remove(it)) }
         if (rehacer && cacheRotulos.size > 60) cacheRotulos.clear()
+        var cajaSel: android.graphics.RectF? = null
         for (tx in ed.textos) {
             val visible = t in tx.ini..tx.fin || tx.id == selTexto && exo?.isPlaying != true && t in (tx.ini - 1)..(tx.fin + 1)
             var iv = vistasRotulos[tx.id]
@@ -1325,23 +1329,34 @@ class TabletActivity : Activity() {
                 vistasRotulos[tx.id] = iv
             }
             if (!visible) { iv.visibility = View.GONE; continue }
-            val clave = tx.json().toString() + "|$w|$h"
+            // El dibujo no depende del lugar, de los keyframes ni del estiramiento: así no se rehace al moverlo
+            val clave = tx.copy(x = 0.5f, y = 0.5f, ini = 0, fin = 0, kf = emptyList(), ax = 1f, ay = 1f).json().toString() + "|$w|$h"
             val bmp = cacheRotulos.getOrPut(clave) { Rotulo.bitmap(this, tx, w, h) { imagenLocal(it) } ?: Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888) }
             if (iv.tag != clave) { iv.setImageBitmap(bmp); iv.tag = clave }
             val k = tx.pos(t)
-            val e = k.esc * (if (tx.id == gId) gEscVisual else 1f)
-            iv.scaleX = e; iv.scaleY = e
+            val e = if (tx.id == gId) gEscVisual else 1f
+            iv.scaleX = k.escX * e; iv.scaleY = k.escY * e
             iv.translationX = k.x * w - bmp.width / 2f
             iv.translationY = k.y * h - bmp.height / 2f
             iv.visibility = View.VISIBLE
             iv.alpha = if (tx.id == selTexto) 1f else 0.97f
-            iv.background = if (tx.id == selTexto && exo?.isPlaying != true) GradientDrawable().apply { setStroke(ui.dp(2), Ui.amarillo) } else null
+            iv.background = null
+            if (tx.id == selTexto && exo?.isPlaying != true) {
+                val cx = k.x * w; val cy = k.y * h
+                val mw = bmp.width * iv.scaleX / 2f; val mh = bmp.height * iv.scaleY / 2f
+                cajaSel = android.graphics.RectF(cx - mw, cy - mh, cx + mw, cy + mh)
+            }
         }
+        if (::manijas.isInitialized) manijas.caja = cajaSel
     }
 
     // ---------------------------------------------------------------- gestos sobre el video
 
-    private var gObjetivo = 0            // 0 nada · 1 texto o sticker · 2 video (zoom y encuadre del tramo)
+    private var gObjetivo = 0            // 0 nada · 1 texto o sticker · 2 video (zoom y encuadre del tramo) · 3 nodo de la caja
+    private var gNodo: Manijas.Nodo? = null
+    private var gCentroX = 0f
+    private var gCentroY = 0f
+    private var gD0 = 1f
     private var gId: String? = null
     private var gEscVisual = 1f          // escala mientras se pellizca un sticker sin keyframes (se guarda al soltar)
     private var gMovio = false
@@ -1352,6 +1367,40 @@ class TabletActivity : Activity() {
     private var gKv0 = Kf(0)
     private var gTam0 = 0.1f
     private var gTocoCapa = false
+
+    /**
+     * Arrastre de un nodo de la caja: las esquinas escalan parejo; los del medio estiran solo el ancho (izquierda y derecha)
+     * o solo el alto (arriba y abajo). El sticker crece o se achica desde su centro.
+     * Con keyframes, el cambio queda en el keyframe del cabezal (o crea uno); sin keyframes, cambia el sticker fijo.
+     */
+    private fun moverNodo(x: Float, y: Float) {
+        val id = gId ?: return
+        val n = gNodo ?: return
+        val dist = when (n) {
+            Manijas.Nodo.IZQ, Manijas.Nodo.DER -> kotlin.math.abs(x - gCentroX)
+            Manijas.Nodo.SUP, Manijas.Nodo.INF -> kotlin.math.abs(y - gCentroY)
+            else -> kotlin.math.hypot(x - gCentroX, y - gCentroY)
+        }
+        if (!gMovio && kotlin.math.abs(dist - gD0) < ui.dp(3)) return
+        gMovio = true
+        val f = (dist / gD0).coerceIn(0.03f, 30f)
+        val t = tiempoActual()
+        ed = ed.copy(textos = ed.textos.map { tx ->
+            if (tx.id != id) tx
+            else when (n) {
+                Manijas.Nodo.IZQ, Manijas.Nodo.DER ->
+                    if (tx.kf.isEmpty()) tx.copy(ax = (gK0.sx * f).coerceIn(0.05f, 20f))
+                    else kfTextoEn(tx, t) { k -> k.copy(sx = (gK0.sx * f).coerceIn(0.05f, 20f)) }
+                Manijas.Nodo.SUP, Manijas.Nodo.INF ->
+                    if (tx.kf.isEmpty()) tx.copy(ay = (gK0.sy * f).coerceIn(0.05f, 20f))
+                    else kfTextoEn(tx, t) { k -> k.copy(sy = (gK0.sy * f).coerceIn(0.05f, 20f)) }
+                else ->
+                    if (tx.kf.isEmpty()) { gEscVisual = f; tx }
+                    else kfTextoEn(tx, t) { k -> k.copy(esc = (gK0.esc * f).coerceIn(0.05f, 12f)) }
+            }
+        })
+        dibujarTextos(false)
+    }
 
     /** Centro y separación de los dedos (sin contar el que se está levantando). */
     private fun dedos(e: MotionEvent): Triple<Float, Float, Float> {
@@ -1410,6 +1459,21 @@ class TabletActivity : Activity() {
                 v.parent?.requestDisallowInterceptTouchEvent(true)
                 exo?.pause()
                 gMovio = false; gEscVisual = 1f
+                // ¿Agarró uno de los 8 nodos de la caja del sticker elegido?
+                val nodo = manijas.nodoEn(e.x, e.y)
+                val caja = manijas.caja
+                if (nodo != null && caja != null && selTexto != null) {
+                    gObjetivo = 3; gNodo = nodo; gId = selTexto; gTocoCapa = true
+                    guardarHistoria()
+                    gBase(e)
+                    gCentroX = caja.centerX(); gCentroY = caja.centerY()
+                    gD0 = when (nodo) {
+                        Manijas.Nodo.IZQ, Manijas.Nodo.DER -> kotlin.math.abs(e.x - gCentroX)
+                        Manijas.Nodo.SUP, Manijas.Nodo.INF -> kotlin.math.abs(e.y - gCentroY)
+                        else -> kotlin.math.hypot(e.x - gCentroX, e.y - gCentroY)
+                    }.coerceAtLeast(ui.dp(6).toFloat())
+                    return@OnTouchListener true
+                }
                 val tocada = capaEnVista(e.x, e.y)
                 gTocoCapa = tocada != null
                 val t = tiempoActual()
@@ -1428,6 +1492,7 @@ class TabletActivity : Activity() {
                 true
             }
             MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_POINTER_UP -> {
+                if (gObjetivo == 3) return@OnTouchListener true
                 if (gObjetivo == 0 && e.actionMasked == MotionEvent.ACTION_POINTER_DOWN && selTexto == null && !selMusica && ed.segmentos.isNotEmpty()) {
                     // Pellizco sobre el video sin nada elegido: se elige el tramo que se está viendo
                     sel = indiceActual(); gObjetivo = 2; guardarHistoria(); refrescarPanel()
@@ -1437,6 +1502,7 @@ class TabletActivity : Activity() {
             }
             MotionEvent.ACTION_MOVE -> {
                 if (gObjetivo == 0) return@OnTouchListener true
+                if (gObjetivo == 3) { moverNodo(e.x, e.y); return@OnTouchListener true }
                 val (cx, cy, d) = dedos(e)
                 val slop = ui.dp(6)
                 if (!gMovio && kotlin.math.abs(cx - gCx0) < slop && kotlin.math.abs(cy - gCy0) < slop && (gDist0 == 0f || kotlin.math.abs(d - gDist0) < slop)) return@OnTouchListener true
@@ -1472,13 +1538,13 @@ class TabletActivity : Activity() {
                     }
                 } else {
                     val id = gId
-                    if (gObjetivo == 1 && id != null && gEscVisual != 1f) {
+                    if ((gObjetivo == 1 || gObjetivo == 3) && id != null && gEscVisual != 1f) {
                         val f = gEscVisual
                         ed = ed.copy(textos = ed.textos.map { if (it.id == id && it.kf.isEmpty()) it.copy(tam = (gTam0 * f).coerceIn(0.01f, 1.5f)) else it })
                     }
                     guardar(); refrescarPanel()
                 }
-                gEscVisual = 1f; gObjetivo = 0; gId = null
+                gEscVisual = 1f; gObjetivo = 0; gId = null; gNodo = null
                 v.parent?.requestDisallowInterceptTouchEvent(false)
                 raiz.requestFocus()
                 true

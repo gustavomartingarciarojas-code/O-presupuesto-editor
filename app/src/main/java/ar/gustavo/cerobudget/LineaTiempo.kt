@@ -103,6 +103,19 @@ class LineaTiempo(ctx: Context, private val ui: Ui) : View(ctx) {
         }
     })
 
+    /** Ruedita del mouse: acerca o aleja la línea (con el mouse no se puede pellizcar). */
+    override fun onGenericMotionEvent(e: MotionEvent): Boolean {
+        if (e.actionMasked == MotionEvent.ACTION_SCROLL) {
+            val v = e.getAxisValue(MotionEvent.AXIS_VSCROLL).takeIf { it != 0f } ?: e.getAxisValue(MotionEvent.AXIS_HSCROLL)
+            if (v != 0f) {
+                pxPorMs = (pxPorMs * (if (v > 0) 1.25f else 0.8f)).coerceIn(0.0004f, 0.6f)
+                invalidate()
+                return true
+            }
+        }
+        return super.onGenericMotionEvent(e)
+    }
+
     // ================================================================ medidas de la vista
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {

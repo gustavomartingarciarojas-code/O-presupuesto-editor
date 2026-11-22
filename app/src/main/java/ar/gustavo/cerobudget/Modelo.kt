@@ -44,11 +44,18 @@ data class Kf(val t: Long, val zoom: Float = 1f, val px: Float = 0f, val py: Flo
     }
 }
 
-/** Keyframe de un texto o sticker: posición y escala en el ms t de la línea de tiempo. */
-data class KfT(val t: Long, val x: Float, val y: Float, val esc: Float = 1f) {
+/**
+ * Keyframe de un texto o sticker en el ms t de la línea de tiempo: posición, escala pareja (esc)
+ * y estiramiento del ancho (sx) y del alto (sy). El tamaño final es esc × sx de ancho y esc × sy de alto.
+ */
+data class KfT(val t: Long, val x: Float, val y: Float, val esc: Float = 1f, val sx: Float = 1f, val sy: Float = 1f) {
     fun json(): JSONObject = JSONObject().put("t", t).put("x", x.toDouble()).put("y", y.toDouble()).put("e", esc.toDouble())
+        .put("sx", sx.toDouble()).put("sy", sy.toDouble())
+    val escX: Float get() = esc * sx
+    val escY: Float get() = esc * sy
     companion object {
-        fun de(j: JSONObject) = KfT(j.getLong("t"), j.optDouble("x", 0.5).toFloat(), j.optDouble("y", 0.5).toFloat(), j.optDouble("e", 1.0).toFloat())
+        fun de(j: JSONObject) = KfT(j.getLong("t"), j.optDouble("x", 0.5).toFloat(), j.optDouble("y", 0.5).toFloat(), j.optDouble("e", 1.0).toFloat(),
+            j.optDouble("sx", 1.0).toFloat(), j.optDouble("sy", 1.0).toFloat())
     }
 }
 
@@ -138,18 +145,21 @@ data class Texto(
     val color: String = "#FFFFFF",
     val estilo: String = "contorno", // contorno · caja · simple
     val tipo: String = "texto",      // texto · emoji · imagen (en imagen, "texto" es el nombre del archivo)
-    val kf: List<KfT> = emptyList()
+    val kf: List<KfT> = emptyList(),
+    val ax: Float = 1f,     // estiramiento fijo del ancho (cuando no hay keyframes)
+    val ay: Float = 1f      // estiramiento fijo del alto
 ) {
-    /** Posición y escala en el ms t de la línea de tiempo. */
+    /** Posición, escala y estiramiento en el ms t de la línea de tiempo. */
     fun pos(t: Long): KfT = Interp.en(kf, t, { it.t }) { a, b, u ->
-        KfT(t, Interp.f(a.x, b.x, u), Interp.f(a.y, b.y, u), Interp.f(a.esc, b.esc, u))
-    } ?: KfT(t, x, y, 1f)
+        KfT(t, Interp.f(a.x, b.x, u), Interp.f(a.y, b.y, u), Interp.f(a.esc, b.esc, u), Interp.f(a.sx, b.sx, u), Interp.f(a.sy, b.sy, u))
+    } ?: KfT(t, x, y, 1f, ax, ay)
 
     fun json(): JSONObject = JSONObject().apply {
         put("id", id); put("texto", texto); put("ini", ini); put("fin", fin)
         put("x", x.toDouble()); put("y", y.toDouble()); put("tam", tam.toDouble())
         put("fuente", fuente); put("color", color); put("estilo", estilo); put("tipo", tipo)
         put("kf", JSONArray().apply { kf.forEach { put(it.json()) } })
+        put("ax", ax.toDouble()); put("ay", ay.toDouble())
     }
 
     companion object {
@@ -158,7 +168,8 @@ data class Texto(
             j.optDouble("x", 0.5).toFloat(), j.optDouble("y", 0.8).toFloat(), j.optDouble("tam", 0.07).toFloat(),
             j.optString("fuente", "Poppins-Bold"), j.optString("color", "#FFFFFF"), j.optString("estilo", "contorno"),
             j.optString("tipo", "texto"),
-            arr(j.optJSONArray("kf")).let { a -> List(a.length()) { KfT.de(a.getJSONObject(it)) } }
+            arr(j.optJSONArray("kf")).let { a -> List(a.length()) { KfT.de(a.getJSONObject(it)) } },
+            j.optDouble("ax", 1.0).toFloat(), j.optDouble("ay", 1.0).toFloat()
         )
     }
 }
