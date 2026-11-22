@@ -167,11 +167,14 @@ data class Texto(
     val fuente: String = "Poppins-Bold",
     val color: String = "#FFFFFF",
     val estilo: String = "contorno", // contorno · caja · simple
-    val tipo: String = "texto",      // texto · emoji · imagen (en imagen, "texto" es el nombre del archivo)
+    val tipo: String = "texto",      // texto · emoji · imagen · mascara (en imagen, "texto" es el archivo; en mascara, la forma)
     val kf: List<KfT> = emptyList(),
     val ax: Float = 1f,     // estiramiento fijo del ancho (cuando no hay keyframes)
-    val ay: Float = 1f      // estiramiento fijo del alto
+    val ay: Float = 1f,     // estiramiento fijo del alto
+    val suave: Float = 0.15f, // máscara: borde difuminado, 0 a 0,5
+    val ang: Float = 0f       // máscara: giro en grados (+ derecha, − izquierda)
 ) {
+    val esMascara: Boolean get() = tipo == "mascara"
     /** Posición, escala y estiramiento en el ms t de la línea de tiempo. */
     fun pos(t: Long): KfT = Interp.en(kf, t, { it.t }) { a, b, u ->
         KfT(t, Interp.f(a.x, b.x, u), Interp.f(a.y, b.y, u), Interp.f(a.esc, b.esc, u), Interp.f(a.sx, b.sx, u), Interp.f(a.sy, b.sy, u))
@@ -183,6 +186,7 @@ data class Texto(
         put("fuente", fuente); put("color", color); put("estilo", estilo); put("tipo", tipo)
         put("kf", JSONArray().apply { kf.forEach { put(it.json()) } })
         put("ax", ax.toDouble()); put("ay", ay.toDouble())
+        put("suave", suave.toDouble()); put("ang", ang.toDouble())
     }
 
     companion object {
@@ -192,7 +196,8 @@ data class Texto(
             j.optString("fuente", "Poppins-Bold"), j.optString("color", "#FFFFFF"), j.optString("estilo", "contorno"),
             j.optString("tipo", "texto"),
             arr(j.optJSONArray("kf")).let { a -> List(a.length()) { KfT.de(a.getJSONObject(it)) } },
-            j.optDouble("ax", 1.0).toFloat(), j.optDouble("ay", 1.0).toFloat()
+            j.optDouble("ax", 1.0).toFloat(), j.optDouble("ay", 1.0).toFloat(),
+            j.optDouble("suave", 0.15).toFloat(), j.optDouble("ang", 0.0).toFloat()
         )
     }
 }
@@ -206,6 +211,26 @@ data class Edicion(
     val textos: List<Texto> = emptyList(),
     val kfMusica: List<KfM> = emptyList()
 ) {
+    /**
+     * Las ediciones viejas tenían la máscara dentro de cada tramo. Ahora la máscara es una pista propia de la
+     * línea de tiempo: cada máscara de tramo pasa a ser una pista que cubre ese mismo tramo.
+     */
+    fun conMascarasEnPista(): Edicion {
+        if (segmentos.none { it.mascara.isNotEmpty() }) return this
+        var acc = 0L
+        val nuevas = mutableListOf<Texto>()
+        val segs = segmentos.mapIndexed { i, s ->
+            val ini = acc; acc += s.dura
+            if (s.mascara.isEmpty()) s
+            else {
+                nuevas += Texto("m" + System.currentTimeMillis().toString(36) + i, s.mascara, ini, ini + s.dura,
+                    x = s.mX, y = s.mY, tam = s.mTam, tipo = "mascara", suave = s.mSuave, ang = s.mAng)
+                s.copy(mascara = "")
+            }
+        }
+        return copy(segmentos = segs, textos = nuevas + textos)
+    }
+
     fun volMusicaEn(t: Long): Float = Interp.en(kfMusica, t, { it.t }) { a, b, u -> KfM(t, Interp.f(a.vol, b.vol, u)) }?.vol ?: volMusica
 
     val total: Long get() = segmentos.sumOf { it.dura }

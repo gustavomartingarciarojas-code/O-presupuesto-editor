@@ -80,8 +80,10 @@ class Manijas(ctx: Context, private val ui: Ui) : View(ctx) {
 @SuppressLint("ViewConstructor")
 class GuiaMascara(ctx: Context, private val ui: Ui) : View(ctx) {
 
-    /** Lo que se dibuja: forma, tamaño, centro (0 a 1) y ángulo. null = no se muestra. */
-    var datos: Segmento? = null
+    /** Lo que se dibuja: forma, tamaño, centro (0 a 1) y ángulo, ya calculados para el momento actual. null = no se muestra. */
+    class Datos(val mascara: String, val mTam: Float, val mX: Float, val mY: Float, val mAng: Float)
+
+    var datos: Datos? = null
         set(v) {
             val antes = field
             field = v

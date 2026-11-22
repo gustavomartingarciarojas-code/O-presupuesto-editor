@@ -157,7 +157,7 @@ class TabletActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.decorView.setBackgroundColor(Ui.fondo)
-        try { ed = Edicion.de(JSONObject(prefs.getString("edicion", "{}") ?: "{}")) } catch (_: Exception) { }
+        try { ed = Edicion.de(JSONObject(prefs.getString("edicion", "{}") ?: "{}")).conMascarasEnPista() } catch (_: Exception) { }
         try {
             val a = JSONArray(prefs.getString("clips", "[]") ?: "[]")
             clipsCel = List(a.length()) { Clip.de(a.getJSONObject(it)) }
@@ -355,24 +355,21 @@ class TabletActivity : Activity() {
             conTramo += b
         }
         b3.addView(ft, ui.lp())
-        b3.addView(ui.texto("Máscara", 14f, Ui.tinta, true).apply { setPadding(0, ui.dp(10), 0, ui.dp(4)) }, ui.lp())
+        b3.addView(ui.texto("Máscara", 14f, Ui.tinta, true).apply { setPadding(0, ui.dp(10), 0, 0) }, ui.lp())
+        b3.addView(ui.texto("La máscara tiene su propia pista (celeste) en la línea de tiempo: empieza en el cabezal y llega hasta el final; con las manijas cambiás dónde empieza y termina. Tocá la pista para elegirla y cambiarle la forma.", 13f, Ui.gris).apply { setPadding(0, 0, 0, ui.dp(4)) }, ui.lp())
         listOf(listOf("" to "Ninguna", "horizontal" to "Horizontal", "reflejo" to "Reflejo"),
             listOf("circulo" to "Círculo", "ovalo" to "Óvalo", "rectangulo" to "Rectángulo")).forEachIndexed { fi, grupo ->
             val fmk = ui.fila()
             for ((clave, t) in grupo) {
                 val b = ui.boton(t, false, 13f)
-                b.setOnClickListener {
-                    cambiarTramo(reconstruirPlayer = false) { s -> if (s.mascara.isEmpty() && clave == "reflejo") s.copy(mascara = clave, mTam = 0.3f) else s.copy(mascara = clave) }
-                    raiz.requestFocus()
-                }
+                b.setOnClickListener { elegirFormaMascara(clave); raiz.requestFocus() }
                 fmk.addView(b, ui.peso(1f, 2))
                 botonesMascara += clave to b
-                conTramo += b
             }
             b3.addView(fmk, ui.lp(if (fi == 0) 0 else 4))
         }
         panelMascara = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        fun barraMascara(titulo: String, maximo: Int = 100, aplicar: (Segmento, Int) -> Segmento): SeekBar {
+        fun barraMascara(titulo: String, maximo: Int = 100, aplicar: (Texto, Int) -> Texto): SeekBar {
             panelMascara.addView(ui.texto(titulo, 13f, Ui.gris).apply { setPadding(0, ui.dp(6), 0, 0) }, ui.lp())
             val sb = SeekBar(this).apply {
                 max = maximo
@@ -381,7 +378,7 @@ class TabletActivity : Activity() {
             }
             sb.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(s: SeekBar?, p: Int, delUsuario: Boolean) {
-                    if (delUsuario) { cambiarTramo(historia = false, reconstruirPlayer = false) { aplicar(it, p) }; textosMascara() }
+                    if (delUsuario) { cambiarTexto(historia = false) { aplicar(it, p) }; textosMascara() }
                 }
                 override fun onStartTrackingTouch(s: SeekBar?) { guardarHistoria() }
                 override fun onStopTrackingTouch(s: SeekBar?) { guardar(); refrescarPanel(); raiz.requestFocus() }
@@ -390,15 +387,22 @@ class TabletActivity : Activity() {
             return sb
         }
         panelMascara.addView(ui.texto("En el video: arrastrá el punto amarillo para mover la máscara.", 13f, Ui.gris).apply { setPadding(0, ui.dp(6), 0, 0) }, ui.lp())
-        mTamBarra = barraMascara("Tamaño (todo a la izquierda = cerrada del todo)") { s, p -> s.copy(mTam = p / 100f * 1.1f) }
-        mSuaveBarra = barraMascara("Borde difuminado") { s, p -> s.copy(mSuave = p / 100f * 0.5f) }
-        mXBarra = barraMascara("Posición horizontal (izquierda ↔ derecha)") { s, p -> s.copy(mX = p / 100f) }
-        mYBarra = barraMascara("Posición vertical (arriba ↔ abajo)") { s, p -> s.copy(mY = p / 100f) }
+        mTamBarra = barraMascara("Tamaño (todo a la izquierda = cerrada del todo)") { m, p ->
+            val v = p / 100f * 1.1f
+            if (m.kf.isEmpty()) m.copy(tam = v) else kfTextoEn(m, tiempoActual()) { k -> k.copy(esc = if (m.tam > 0f) v / m.tam else 1f) }
+        }
+        mSuaveBarra = barraMascara("Borde difuminado") { m, p -> m.copy(suave = p / 100f * 0.5f) }
+        mXBarra = barraMascara("Posición horizontal (izquierda ↔ derecha)") { m, p ->
+            if (m.kf.isEmpty()) m.copy(x = p / 100f) else kfTextoEn(m, tiempoActual()) { k -> k.copy(x = p / 100f) }
+        }
+        mYBarra = barraMascara("Posición vertical (arriba ↔ abajo)") { m, p ->
+            if (m.kf.isEmpty()) m.copy(y = p / 100f) else kfTextoEn(m, tiempoActual()) { k -> k.copy(y = p / 100f) }
+        }
         mAngTexto = ui.texto("", 13f, Ui.tinta, true).apply { setPadding(0, ui.dp(8), 0, 0) }
         panelMascara.addView(mAngTexto, ui.lp())
-        mAngBarra = barraMascara("Giro (− izquierda ↔ + derecha)", 360) { s, p -> s.copy(mAng = (p - 180).toFloat()) }
+        mAngBarra = barraMascara("Giro (− izquierda ↔ + derecha)", 360) { m, p -> m.copy(ang = (p - 180).toFloat()) }
         val bCentrar = ui.boton("Centrar y enderezar", false, 13f)
-        bCentrar.setOnClickListener { cambiarTramo(reconstruirPlayer = false) { it.copy(mX = 0.5f, mY = 0.5f, mAng = 0f) }; raiz.requestFocus() }
+        bCentrar.setOnClickListener { cambiarTexto { it.copy(x = 0.5f, y = 0.5f, ang = 0f, kf = emptyList()) }; raiz.requestFocus() }
         panelMascara.addView(bCentrar, ui.lp(6))
         b3.addView(panelMascara, ui.lp())
 
@@ -542,15 +546,7 @@ class TabletActivity : Activity() {
             for ((v, b) in botonesVel) ui.marcar(b, v == s.vel)
             velTexto.text = "Velocidad: " + Segmento.textoVel(s.vel)
             velBarra.progress = (kotlin.math.log10(s.vel / 0.1) / 3.0 * 1000).toInt().coerceIn(0, 1000)
-            mXBarra.progress = (s.mX * 100).toInt().coerceIn(0, 100)
-            mYBarra.progress = (s.mY * 100).toInt().coerceIn(0, 100)
-            mAngBarra.progress = (s.mAng + 180).toInt().coerceIn(0, 360)
-            textosMascara()
             for ((k, b) in botonesTrans) ui.marcar(b, k == s.trans)
-            for ((k, b) in botonesMascara) ui.marcar(b, k == s.mascara)
-            panelMascara.visibility = if (s.mascara.isEmpty()) View.GONE else View.VISIBLE
-            mTamBarra.progress = (s.mTam / 1.1f * 100).toInt().coerceIn(0, 100)
-            mSuaveBarra.progress = (s.mSuave / 0.5f * 100).toInt().coerceIn(0, 100)
             refrescarEncuadre()
         } else {
             tramoInfo.setTextColor(Ui.gris)
@@ -558,11 +554,10 @@ class TabletActivity : Activity() {
             for ((_, b) in botonesVel) ui.marcar(b, false)
             velTexto.text = "Velocidad"
             for ((_, b) in botonesTrans) ui.marcar(b, false)
-            for ((_, b) in botonesMascara) ui.marcar(b, false)
-            panelMascara.visibility = View.GONE
             kfInfo.text = ""; zoomTexto.text = ""
         }
         refrescarTextos()
+        refrescarMascara()
 
         if (ed.musica.isEmpty()) {
             musNombre.setTextColor(Ui.gris); musNombre.text = "Sin música."
@@ -1006,8 +1001,8 @@ class TabletActivity : Activity() {
     private fun refrescarTextos() {
         if (ed.textos.none { it.id == selTexto }) selTexto = null
         val t = ed.textos.firstOrNull { it.id == selTexto }
-        panelTexto.visibility = if (t == null) View.GONE else View.VISIBLE
-        if (t != null) {
+        panelTexto.visibility = if (t == null || t.esMascara) View.GONE else View.VISIBLE
+        if (t != null && !t.esMascara) {
             soloTexto.forEach { it.visibility = if (t.tipo == "texto") View.VISIBLE else View.GONE }
             for ((k, b) in botonesFuente) ui.marcar(b, k == t.fuente)
             for ((k, b) in botonesEstilo) ui.marcar(b, k == t.estilo)
@@ -1296,28 +1291,71 @@ class TabletActivity : Activity() {
     /** Muestra la máscara del tramo que se está viendo. */
     /** Textos con los valores de la máscara del tramo elegido. */
     private fun textosMascara() {
-        val s = ed.segmentos.getOrNull(sel) ?: return
+        val m = mascaraElegida() ?: return
         if (!::mAngTexto.isInitialized) return
-        mAngTexto.text = "Giro: ${s.mAng.toInt()}°" + if (s.mascara == "horizontal") "  ·  el tamaño no cambia la máscara Horizontal" else ""
+        mAngTexto.text = "Giro: ${m.ang.toInt()}°" + if (m.texto == "horizontal") "  ·  el tamaño no cambia la máscara Horizontal" else ""
+    }
+
+    /** La pista de máscara elegida en la línea de tiempo, si la hay. */
+    private fun mascaraElegida(): Texto? = ed.textos.firstOrNull { it.id == selTexto && it.esMascara }
+
+    /** Botones y barras de la máscara según la pista elegida. */
+    private fun refrescarMascara() {
+        if (!::panelMascara.isInitialized) return
+        val m = mascaraElegida()
+        for ((k, b) in botonesMascara) ui.marcar(b, m != null && k == m.texto)
+        panelMascara.visibility = if (m == null) View.GONE else View.VISIBLE
+        if (m == null) return
+        val k = m.pos(tiempoActual())
+        mTamBarra.progress = (m.tam * k.esc / 1.1f * 100).toInt().coerceIn(0, 100)
+        mSuaveBarra.progress = (m.suave / 0.5f * 100).toInt().coerceIn(0, 100)
+        mXBarra.progress = (k.x * 100).toInt().coerceIn(0, 100)
+        mYBarra.progress = (k.y * 100).toInt().coerceIn(0, 100)
+        mAngBarra.progress = (m.ang + 180).toInt().coerceIn(0, 360)
+        textosMascara()
+    }
+
+    /**
+     * Botones de forma: con una máscara elegida, le cambian la forma (Ninguna la borra).
+     * Sin máscara elegida, crean una pista de máscara nueva desde el cabezal hasta el final.
+     */
+    private fun elegirFormaMascara(forma: String) {
+        val m = mascaraElegida()
+        if (m != null) {
+            if (forma.isEmpty()) { borrarTexto(); return }
+            cambiarTexto { it.copy(texto = forma, tam = if (forma == "reflejo" && it.texto != "reflejo" && it.tam > 0.6f) 0.3f else it.tam) }
+            return
+        }
+        if (forma.isEmpty()) { avisar("Para sacar una máscara, tocá su pista celeste y después Ninguna (o Borrar)."); return }
+        if (ed.segmentos.isEmpty()) { avisar("Primero agregá un video."); return }
+        exo?.pause()
+        val ini = tiempoActual().coerceAtMost((ed.total - 500).coerceAtLeast(0))
+        val nueva = Texto("m" + System.currentTimeMillis().toString(36), forma, ini, ed.total.coerceAtLeast(ini + 500),
+            x = 0.5f, y = 0.5f, tam = if (forma == "reflejo") 0.3f else 0.7f, tipo = "mascara")
+        selTexto = nueva.id; selMusica = false
+        cambiar(ed.copy(textos = ed.textos + nueva), reconstruirPlayer = false)
     }
 
     private fun dibujarMascara() {
         if (!::capaMascara.isInitialized) return
-        val s = ed.segmentos.getOrNull(indiceActual())
+        val t = tiempoActual()
         val w = capaMascara.width.takeIf { it > 0 } ?: marco.width
         val h = capaMascara.height.takeIf { it > 0 } ?: marco.height
-        // Guía amarilla: solo con el tramo elegido a la vista, en pausa y sin un texto o sticker elegido
-        val i = indiceActual()
-        guiaMascara.datos = if (s != null && s.mascara.isNotEmpty() && i == sel && selTexto == null && !selMusica && exo?.isPlaying != true) s else null
-        if (s == null || s.mascara.isEmpty() || w <= 0 || h <= 0) {
+        // La máscara que se ve: la elegida si el cabezal está dentro; si no, la última pista de máscara que cubre el cabezal
+        val sel0 = mascaraElegida()?.takeIf { t in it.ini..it.fin }
+        val m = sel0 ?: ed.textos.lastOrNull { it.esMascara && t in it.ini until it.fin }
+        // Guía amarilla: solo para la máscara elegida, en pausa
+        guiaMascara.datos = if (sel0 != null && exo?.isPlaying != true) sel0.pos(t).let { k -> GuiaMascara.Datos(sel0.texto, sel0.tam * k.esc, k.x, k.y, sel0.ang) } else null
+        if (m == null || w <= 0 || h <= 0) {
             if (capaMascara.visibility != View.GONE) capaMascara.visibility = View.GONE
             claveMascara = ""
             return
         }
-        val clave = "${s.mascara}|${s.mTam}|${s.mSuave}|${s.mX}|${s.mY}|${s.mAng}|$w|$h"
+        val k = m.pos(t)
+        val clave = "${m.texto}|${m.tam * k.esc}|${m.suave}|${k.x}|${k.y}|${m.ang}|$w|$h"
         if (clave != claveMascara) {
             if (cacheMascaras.size > 20) cacheMascaras.clear()
-            val bmp = cacheMascaras.getOrPut(clave) { Rotulo.mascara(s.mascara, s.mTam, s.mSuave, w / 2, h / 2, s.mX, s.mY, s.mAng) ?: Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888) }
+            val bmp = cacheMascaras.getOrPut(clave) { Rotulo.mascaraEn(m, t, w / 2, h / 2) ?: Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888) }
             capaMascara.setImageBitmap(bmp)
             claveMascara = clave
         }
@@ -1387,6 +1425,7 @@ class TabletActivity : Activity() {
         if (rehacer && cacheRotulos.size > 60) cacheRotulos.clear()
         var cajaSel: android.graphics.RectF? = null
         for (tx in ed.textos) {
+            if (tx.esMascara) continue   // las máscaras se dibujan aparte (capaMascara)
             val visible = t in tx.ini..tx.fin || tx.id == selTexto && exo?.isPlaying != true && t in (tx.ini - 1)..(tx.fin + 1)
             var iv = vistasRotulos[tx.id]
             if (iv == null) {
@@ -1542,7 +1581,7 @@ class TabletActivity : Activity() {
                 }
                 // ¿Agarró el punto amarillo del centro de la máscara?
                 if (guiaMascara.datos != null && guiaMascara.tocaCentro(e.x, e.y)) {
-                    gObjetivo = 4; gId = null; gTocoCapa = true
+                    gObjetivo = 4; gId = selTexto; gTocoCapa = true
                     guardarHistoria()
                     return@OnTouchListener true
                 }
@@ -1578,7 +1617,8 @@ class TabletActivity : Activity() {
                 if (gObjetivo == 4) {
                     gMovio = true
                     val nx = (e.x / w).coerceIn(0f, 1f); val ny = (e.y / h).coerceIn(0f, 1f)
-                    cambiarTramo(historia = false, reconstruirPlayer = false) { it.copy(mX = nx, mY = ny) }
+                    val t = tiempoActual()
+                    cambiarTexto(historia = false) { m -> if (m.kf.isEmpty()) m.copy(x = nx, y = ny) else kfTextoEn(m, t) { k -> k.copy(x = nx, y = ny) } }
                     dibujarMascara()
                     return@OnTouchListener true
                 }

@@ -49,6 +49,7 @@ class LineaTiempo(ctx: Context, private val ui: Ui) : View(ctx) {
         private val COLOR_STICKER = Color.parseColor("#E3B800")
         private val COLOR_TEXTO = Color.parseColor("#B07BE0")
         private val COLOR_MUSICA = Color.parseColor("#2E8B57")
+        private val COLOR_MASCARA = Color.parseColor("#3FB6C9")
         private const val MAX_PISTAS = 5
     }
 
@@ -197,10 +198,10 @@ class LineaTiempo(ctx: Context, private val ui: Ui) : View(ctx) {
             if (x1 < 0 || x0 > width) continue
             val y = yPista(p)
             rect.set(x0, y, max(x1, x0 + ui.dp(4)), y + hPista)
-            pRelleno.color = if (t.tipo == "texto") COLOR_TEXTO else COLOR_STICKER
+            pRelleno.color = when (t.tipo) { "texto" -> COLOR_TEXTO; "mascara" -> COLOR_MASCARA; else -> COLOR_STICKER }
             c.drawRoundRect(rect, radio, radio, pRelleno)
             val elegido = t.id == capaSel
-            val etiqueta = when (t.tipo) { "imagen" -> "Imagen"; "emoji" -> t.texto; else -> t.texto.replace('\n', ' ') }
+            val etiqueta = when (t.tipo) { "imagen" -> "Imagen"; "emoji" -> t.texto; "mascara" -> "Máscara " + t.texto; else -> t.texto.replace('\n', ' ') }
             if (elegido) { pRelleno.color = Color.argb(60, 255, 255, 255); c.drawRoundRect(rect, radio, radio, pRelleno) }
             textoEn(c, etiqueta, rect, Ui.fondo)
             if (elegido) dibujarManijas(c, rect)

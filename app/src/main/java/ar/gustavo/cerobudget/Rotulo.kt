@@ -72,6 +72,12 @@ object Rotulo {
      * Máscara de un tramo: negro alrededor y la forma transparente, con el borde difuminado.
      * Se dibuja a la mitad del tamaño y se agranda al doble al usarla (ahorra memoria en 4K).
      */
+    /** Máscara de una pista de máscara en el momento t (con sus keyframes de lugar y tamaño). */
+    fun mascaraEn(m: Texto, t: Long, ancho: Int, alto: Int): Bitmap? {
+        val k = m.pos(t)
+        return mascara(m.texto, m.tam * k.esc, m.suave, ancho, alto, k.x, k.y, m.ang)
+    }
+
     fun mascara(forma: String, tam: Float, suave: Float, ancho: Int, alto: Int, centroX: Float = 0.5f, centroY: Float = 0.5f, angulo: Float = 0f): Bitmap? {
         if (forma.isEmpty() || ancho <= 1 || alto <= 1) return null
         val w = ancho; val h = alto

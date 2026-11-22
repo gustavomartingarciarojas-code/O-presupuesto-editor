@@ -131,6 +131,27 @@ object Render {
             if (presentationTimeUs in desde until hasta) visible else oculto
     }
 
+    /** Máscara con pista propia en la línea de tiempo. Dibujada a la mitad y agrandada al doble; si tiene keyframes, se rehace según el momento. */
+    private class PistaMascara(private val m: Texto, private val w: Int, private val h: Int) : BitmapOverlay() {
+        private val desde = m.ini * 1000
+        private val hasta = m.fin * 1000
+        private val visible = OverlaySettings.Builder().setScale(2f, 2f).build()
+        private val oculto = OverlaySettings.Builder().setScale(2f, 2f).setAlphaScale(0f).build()
+        private val fija: Bitmap? = if (m.kf.isEmpty()) Rotulo.mascaraEn(m, m.ini, w, h) else null
+        private var clave = ""
+        private var ultima: Bitmap? = null
+        private val vacia = Bitmap.createBitmap(2, 2, Bitmap.Config.ARGB_8888)
+        override fun getBitmap(presentationTimeUs: Long): Bitmap {
+            fija?.let { return it }
+            val k = m.pos(presentationTimeUs / 1000)
+            val c = "${(k.x * 500).toInt()}|${(k.y * 500).toInt()}|${(k.esc * 500).toInt()}"
+            if (c != clave || ultima == null) { ultima = Rotulo.mascaraEn(m, presentationTimeUs / 1000, w, h); clave = c }
+            return ultima ?: vacia
+        }
+        override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings =
+            if (presentationTimeUs in desde until hasta) visible else oculto
+    }
+
     /** Fundidos a negro o a blanco en los cortes que tienen transición. */
     private class Fundidos(private val ed: Edicion) : RgbMatrix {
         private val m = FloatArray(16)
@@ -250,7 +271,9 @@ object Render {
             }
             acc += s.dura
         }
-        ed.textos.forEach { t -> Rotulo.bitmap(ctx, t, w, h, imagenes)?.let { capas += RotuloOverlay(it, t) } }
+        // Máscaras en pista propia (se mantienen sobre todos los tramos que cubren)
+        ed.textos.filter { it.esMascara }.forEach { m -> capas += PistaMascara(m, w / 2, h / 2) }
+        ed.textos.filter { !it.esMascara }.forEach { t -> Rotulo.bitmap(ctx, t, w, h, imagenes)?.let { capas += RotuloOverlay(it, t) } }
         if (capas.isNotEmpty()) generales += OverlayEffect(capas)
         if (ed.segmentos.any { it.trans != "corte" }) generales += Fundidos(ed)
 
