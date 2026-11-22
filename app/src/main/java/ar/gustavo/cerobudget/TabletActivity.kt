@@ -96,12 +96,20 @@ class TabletActivity : Activity() {
     private lateinit var tamBarra: SeekBar
     private lateinit var tamTexto: TextView
     private val soloTexto = mutableListOf<View>()
+    private var soloConMusica: List<View> = emptyList()
     private lateinit var capaMascara: ImageView
     private val botonesMascara = mutableListOf<Pair<String, Button>>()
     private lateinit var panelMascara: LinearLayout
     private lateinit var mTamBarra: SeekBar
     private lateinit var mSuaveBarra: SeekBar
     private var claveMascara = ""
+    private lateinit var zoomBarra: SeekBar
+    private lateinit var horBarra: SeekBar
+    private lateinit var verBarra: SeekBar
+    private lateinit var zoomTexto: TextView
+    private lateinit var kfInfo: TextView
+    private lateinit var kfTextoInfo: TextView
+    private lateinit var kfMusicaInfo: TextView
     private val cacheMascaras = mutableMapOf<String, Bitmap>()
     private lateinit var aviso: TextView
     private lateinit var tiempo: TextView
@@ -312,7 +320,7 @@ class TabletActivity : Activity() {
             override fun onProgressChanged(s: SeekBar?, p: Int, delUsuario: Boolean) {
                 if (!delUsuario) return
                 volTexto.text = "Volumen: $p %"
-                cambiarTramo(historia = false, reconstruirPlayer = false) { it.copy(vol = p / 100f) }
+                editarEncuadre(false) { it.copy(vol = p / 100f) }
                 aplicarItem(true)
             }
             override fun onStartTrackingTouch(s: SeekBar?) { guardarHistoria() }
@@ -359,6 +367,40 @@ class TabletActivity : Activity() {
         mTamBarra = barraMascara("Tamaño de la forma") { s, p -> s.copy(mTam = 0.2f + p / 100f * 0.9f) }
         mSuaveBarra = barraMascara("Borde difuminado") { s, p -> s.copy(mSuave = p / 100f * 0.5f) }
         b3.addView(panelMascara, ui.lp())
+
+        // Zoom, encuadre y keyframes del tramo
+        b3.addView(ui.texto("Zoom y encuadre", 14f, Ui.tinta, true).apply { setPadding(0, ui.dp(12), 0, 0) }, ui.lp())
+        zoomTexto = ui.texto("", 13f, Ui.gris)
+        b3.addView(zoomTexto, ui.lp())
+        fun barraTramo(titulo: String?, maximo: Int, aplicar: (Kf, Int) -> Kf): SeekBar {
+            if (titulo != null) b3.addView(ui.texto(titulo, 13f, Ui.gris).apply { setPadding(0, ui.dp(4), 0, 0) }, ui.lp())
+            val sb = SeekBar(this).apply {
+                max = maximo
+                progressTintList = ColorStateList.valueOf(Ui.amarillo); thumbTintList = ColorStateList.valueOf(Ui.amarillo)
+                isFocusable = false
+            }
+            sb.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(s: SeekBar?, p: Int, delUsuario: Boolean) { if (delUsuario) editarEncuadre(false) { aplicar(it, p) } }
+                override fun onStartTrackingTouch(s: SeekBar?) { exo?.pause(); guardarHistoria() }
+                override fun onStopTrackingTouch(s: SeekBar?) { guardar(); refrescarPanel(); raiz.requestFocus() }
+            })
+            b3.addView(sb, ui.lp().apply { height = ui.dp(36) })
+            conTramo += sb
+            return sb
+        }
+        zoomBarra = barraTramo(null, 200) { k, p -> val z = 1f + p / 100f; val lim = Interp.limite(z); k.copy(zoom = z, px = k.px.coerceIn(-lim, lim), py = k.py.coerceIn(-lim, lim)) }
+        horBarra = barraTramo("Encuadre horizontal (izquierda ↔ derecha)", 100) { k, p -> k.copy(px = (p - 50) / 50f * Interp.limite(k.zoom)) }
+        verBarra = barraTramo("Encuadre vertical (arriba ↔ abajo)", 100) { k, p -> k.copy(py = (p - 50) / 50f * Interp.limite(k.zoom)) }
+        val fk = ui.fila()
+        val bKf = ui.boton("◆ Keyframe", true, 13f); val bKfBorrar = ui.boton("Borrar ◆", false, 13f); val bKfTodos = ui.boton("Quitar todos", false, 13f)
+        bKf.setOnClickListener { agregarKfTramo(); raiz.requestFocus() }
+        bKfBorrar.setOnClickListener { borrarKfTramo(); raiz.requestFocus() }
+        bKfTodos.setOnClickListener { cambiarTramo(reconstruirPlayer = false) { it.copy(kf = emptyList()) }; raiz.requestFocus() }
+        fk.addView(bKf, ui.peso(1.2f, 2)); fk.addView(bKfBorrar, ui.peso(1f, 2)); fk.addView(bKfTodos, ui.peso(1.1f, 2))
+        conTramo += bKf; conTramo += bKfBorrar; conTramo += bKfTodos
+        b3.addView(fk, ui.lp(6))
+        kfInfo = ui.texto("", 13f, Ui.gris).apply { setPadding(0, ui.dp(4), 0, 0) }
+        b3.addView(kfInfo, ui.lp())
         val fm = ui.fila()
         val bIzq = ui.boton("◀ Mover", false, 14f); val bDer = ui.boton("Mover ▶", false, 14f)
         bIzq.setOnClickListener { moverTramo(-1); raiz.requestFocus() }
@@ -386,6 +428,19 @@ class TabletActivity : Activity() {
             isFocusable = false
         }
         b4.addView(musBarra, ui.lp(2).apply { height = ui.dp(40) })
+        val fkm = ui.fila()
+        val bKm = ui.boton("◆ Keyframe", true, 13f); val bKmB = ui.boton("Borrar ◆", false, 13f); val bKmT = ui.boton("Quitar todos", false, 13f)
+        bKm.setOnClickListener {
+            if (ed.musica.isNotEmpty()) { val t = tiempoActual(); cambiar(ed.copy(kfMusica = (ed.kfMusica.filter { kotlin.math.abs(it.t - t) > 150 } + KfM(t, ed.volMusicaEn(t))).sortedBy { it.t }), reconstruirPlayer = false) }
+            raiz.requestFocus()
+        }
+        bKmB.setOnClickListener { val t = tiempoActual(); cambiar(ed.copy(kfMusica = ed.kfMusica.filter { kotlin.math.abs(it.t - t) > 300 }), reconstruirPlayer = false); raiz.requestFocus() }
+        bKmT.setOnClickListener { cambiar(ed.copy(kfMusica = emptyList()), reconstruirPlayer = false); raiz.requestFocus() }
+        fkm.addView(bKm, ui.peso(1.2f, 2)); fkm.addView(bKmB, ui.peso(1f, 2)); fkm.addView(bKmT, ui.peso(1.1f, 2))
+        b4.addView(fkm, ui.lp(4))
+        kfMusicaInfo = ui.texto("", 13f, Ui.gris).apply { setPadding(0, ui.dp(4), 0, 0) }
+        b4.addView(kfMusicaInfo, ui.lp())
+        soloConMusica = listOf(fkm, kfMusicaInfo)
         bElegirMus.setOnClickListener {
             val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "audio/*" }
             startActivityForResult(i, 31)
@@ -397,9 +452,13 @@ class TabletActivity : Activity() {
         musBarra.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(s: SeekBar?, p: Int, delUsuario: Boolean) {
                 if (!delUsuario) return
-                ed = ed.copy(volMusica = p / 100f)
+                val v = p / 100f
+                ed = if (ed.kfMusica.isEmpty()) ed.copy(volMusica = v) else {
+                    val t = tiempoActual()
+                    ed.copy(kfMusica = (ed.kfMusica.filter { kotlin.math.abs(it.t - t) > 150 } + KfM(t, v)).sortedBy { it.t })
+                }
                 musTexto.text = "Volumen de la música: $p %"
-                exoMus?.volume = ed.volMusica
+                exoMus?.volume = v
             }
             override fun onStartTrackingTouch(s: SeekBar?) { guardarHistoria() }
             override fun onStopTrackingTouch(s: SeekBar?) { guardar(); raiz.requestFocus() }
@@ -473,8 +532,7 @@ class TabletActivity : Activity() {
             panelMascara.visibility = if (s.mascara.isEmpty()) View.GONE else View.VISIBLE
             mTamBarra.progress = ((s.mTam - 0.2f) / 0.9f * 100).toInt().coerceIn(0, 100)
             mSuaveBarra.progress = (s.mSuave / 0.5f * 100).toInt().coerceIn(0, 100)
-            volBarra.progress = (s.vol * 100).toInt()
-            volTexto.text = "Volumen: ${(s.vol * 100).toInt()} %"
+            refrescarEncuadre()
         } else {
             tramoInfo.setTextColor(Ui.gris)
             tramoInfo.text = if (ed.segmentos.isEmpty()) "La línea de tiempo está vacía: agregá un video desde la lista." else "Tocá un tramo de la línea de tiempo."
@@ -482,17 +540,22 @@ class TabletActivity : Activity() {
             for ((_, b) in botonesTrans) ui.marcar(b, false)
             for ((_, b) in botonesMascara) ui.marcar(b, false)
             panelMascara.visibility = View.GONE
+            kfInfo.text = ""; zoomTexto.text = ""
         }
         refrescarTextos()
 
         if (ed.musica.isEmpty()) {
             musNombre.setTextColor(Ui.gris); musNombre.text = "Sin música."
             musTexto.visibility = View.GONE; musBarra.visibility = View.GONE
+            soloConMusica.forEach { it.visibility = View.GONE }
         } else {
             musNombre.setTextColor(Ui.tinta); musNombre.text = ed.musica
             musTexto.visibility = View.VISIBLE; musBarra.visibility = View.VISIBLE
-            musBarra.progress = (ed.volMusica * 100).toInt()
-            musTexto.text = "Volumen de la música: ${(ed.volMusica * 100).toInt()} %"
+            soloConMusica.forEach { it.visibility = View.VISIBLE }
+            val vm = ed.volMusicaEn(tiempoActual())
+            musBarra.progress = (vm * 100).toInt()
+            musTexto.text = "Volumen de la música: ${(vm * 100).toInt()} %"
+            kfMusicaInfo.text = if (ed.kfMusica.isEmpty()) "Sin keyframes: el volumen es fijo." else "Keyframes: " + ed.kfMusica.joinToString(" · ") { Datos.reloj(it.t) }
         }
         ui.activo(bExportar, ed.segmentos.isNotEmpty() && !exportando)
         linea.max = ed.total.toInt().coerceAtLeast(1)
@@ -508,7 +571,8 @@ class TabletActivity : Activity() {
             val t = TextView(this).apply {
                 text = nombreClip(s.clip).substringBeforeLast('.') + "\n" + Datos.reloj(s.dura) +
                     (if (s.vel != 1f) " · ${s.vel}×".replace(".0×", "×").replace('.', ',') else "") +
-                    (if (s.vol != 1f) " · ${(s.vol * 100).toInt()} %" else "")
+                    (if (s.vol != 1f) " · ${(s.vol * 100).toInt()} %" else "") +
+                    (if (s.kf.isNotEmpty()) " · ◆${s.kf.size}" else "")
                 setTextColor(if (elegido) Ui.fondo else Ui.tinta)
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
                 maxLines = 2; ellipsize = TextUtils.TruncateAt.END
@@ -800,6 +864,7 @@ class TabletActivity : Activity() {
                 if (i != ultimoIndiceTira) { ultimoIndiceTira = i; dibujarTira() }
                 dibujarTextos(false)
                 dibujarMascara()
+                aplicarEncuadre()
                 val (f, color) = ed.fundido(tiempoActual())
                 velo.setBackgroundColor(if (color == "blanco") Color.WHITE else Color.BLACK)
                 velo.alpha = 1f - f
@@ -891,7 +956,10 @@ class TabletActivity : Activity() {
                 if (!delUsuario) return
                 val tam = (20 + p) / 1000f
                 tamTexto.text = "Tamaño: ${(tam * 1000).toInt() / 10f} % del alto".replace('.', ',')
-                cambiarTexto(historia = false) { it.copy(tam = tam) }
+                cambiarTexto(historia = false) { tx ->
+                    if (tx.kf.isEmpty()) tx.copy(tam = tam)
+                    else kfTextoEn(tx, tiempoActual()) { it.copy(esc = tam / tx.tam) }
+                }
             }
             override fun onStartTrackingTouch(s: SeekBar?) { guardarHistoria() }
             override fun onStopTrackingTouch(s: SeekBar?) { guardar(); raiz.requestFocus() }
@@ -928,6 +996,16 @@ class TabletActivity : Activity() {
             fp.addView(bp, ui.peso(1f, 2))
         }
         panelTexto.addView(fp, ui.lp(4))
+        panelTexto.addView(ui.texto("Animación", 14f, Ui.tinta, true).apply { setPadding(0, ui.dp(10), 0, ui.dp(4)) }, ui.lp())
+        val fkt = ui.fila()
+        val bKt = ui.boton("◆ Keyframe", true, 13f); val bKtB = ui.boton("Borrar ◆", false, 13f); val bKtT = ui.boton("Quitar todos", false, 13f)
+        bKt.setOnClickListener { agregarKfTexto() }
+        bKtB.setOnClickListener { val t = tiempoActual(); cambiarTexto { tx -> tx.copy(kf = tx.kf.filter { kotlin.math.abs(it.t - t) > 300 }) } }
+        bKtT.setOnClickListener { cambiarTexto { tx -> val k = tx.pos(tiempoActual()); tx.copy(kf = emptyList(), x = k.x, y = k.y) } }
+        fkt.addView(bKt, ui.peso(1.2f, 2)); fkt.addView(bKtB, ui.peso(1f, 2)); fkt.addView(bKtT, ui.peso(1.1f, 2))
+        panelTexto.addView(fkt, ui.lp())
+        kfTextoInfo = ui.texto("", 13f, Ui.gris).apply { setPadding(0, ui.dp(4), 0, 0) }
+        panelTexto.addView(kfTextoInfo, ui.lp())
         b.addView(panelTexto, ui.lp())
         return b
     }
@@ -958,6 +1036,8 @@ class TabletActivity : Activity() {
                 setStroke(ui.dp(if (hex == t.color) 4 else 1), if (hex == t.color) Ui.amarillo else Ui.linea)
             }
             tamBarra.progress = ((t.tam * 1000).toInt() - 20).coerceIn(0, 180)
+            kfTextoInfo.text = if (t.kf.isEmpty()) "Sin keyframes. Poné el cursor, ubicá el texto y tocá ◆ Keyframe; después mové el cursor, cambiá lugar o tamaño, y se crea otro."
+                else "Keyframes: " + t.kf.joinToString(" · ") { Datos.reloj(it.t) }
             tamTexto.text = "Tamaño: ${(t.tam * 1000).toInt() / 10f} % del alto".replace('.', ',')
         }
         dibujarTextos(true)
@@ -1003,6 +1083,97 @@ class TabletActivity : Activity() {
         } catch (e: Exception) {
             avisar("No pude usar esa imagen: ${e.message}")
         }
+    }
+
+    // ---------------------------------------------------------------- keyframes
+
+    /** ms desde el inicio del tramo elegido hasta el cursor (en tiempo de línea). */
+    private fun relEnTramo(): Long {
+        val s = ed.segmentos.getOrNull(sel) ?: return 0
+        return (tiempoActual() - ed.inicio(sel)).coerceIn(0, s.dura)
+    }
+
+    /**
+     * Cambia zoom, encuadre o volumen del tramo elegido. Sin keyframes, cambia el valor fijo;
+     * con keyframes, cambia (o crea) el keyframe donde está el cursor.
+     */
+    private fun editarEncuadre(historia: Boolean, f: (Kf) -> Kf) {
+        val s = ed.segmentos.getOrNull(sel) ?: return
+        if (indiceActual() != sel) irA(ed.inicio(sel))
+        val nuevo = if (s.kf.isEmpty()) {
+            val n = f(Kf(0, s.zoom, s.px, s.py, s.vol))
+            s.copy(zoom = n.zoom, px = n.px, py = n.py, vol = n.vol)
+        } else {
+            val rel = relEnTramo()
+            val n = f(s.encuadre(rel)).copy(t = rel)
+            s.copy(kf = (s.kf.filter { kotlin.math.abs(it.t - rel) > 150 } + n).sortedBy { it.t })
+        }
+        val l = ed.segmentos.toMutableList(); l[sel] = nuevo
+        if (historia) cambiar(ed.copy(segmentos = l), reconstruirPlayer = false)
+        else { ed = ed.copy(segmentos = l); refrescarTira(); refrescarEncuadre(); aplicarEncuadre() }
+    }
+
+    private fun agregarKfTramo() {
+        val s = ed.segmentos.getOrNull(sel) ?: return
+        if (indiceActual() != sel) { irA(ed.inicio(sel)); return }
+        val rel = relEnTramo()
+        val k = s.encuadre(rel).copy(t = rel)
+        val l = ed.segmentos.toMutableList()
+        l[sel] = s.copy(kf = (s.kf.filter { kotlin.math.abs(it.t - rel) > 150 } + k).sortedBy { it.t })
+        cambiar(ed.copy(segmentos = l), reconstruirPlayer = false)
+    }
+
+    private fun borrarKfTramo() {
+        val s = ed.segmentos.getOrNull(sel) ?: return
+        val rel = relEnTramo()
+        val cerca = s.kf.minByOrNull { kotlin.math.abs(it.t - rel) } ?: return
+        if (kotlin.math.abs(cerca.t - rel) > 400) { avisar("No hay un keyframe en el cursor."); return }
+        // Al borrar el último, el tramo queda con el valor de ese momento
+        val nuevo = if (s.kf.size == 1) s.copy(kf = emptyList(), zoom = cerca.zoom, px = cerca.px, py = cerca.py, vol = cerca.vol)
+            else s.copy(kf = s.kf - cerca)
+        val l = ed.segmentos.toMutableList(); l[sel] = nuevo
+        cambiar(ed.copy(segmentos = l), reconstruirPlayer = false)
+    }
+
+    private fun refrescarEncuadre() {
+        val s = ed.segmentos.getOrNull(sel) ?: return
+        val k = s.encuadre(relEnTramo())
+        zoomBarra.progress = ((k.zoom - 1f) * 100).toInt().coerceIn(0, 200)
+        val lim = Interp.limite(k.zoom)
+        horBarra.progress = if (lim <= 0f) 50 else (50 + k.px / lim * 50).toInt().coerceIn(0, 100)
+        verBarra.progress = if (lim <= 0f) 50 else (50 + k.py / lim * 50).toInt().coerceIn(0, 100)
+        zoomTexto.text = "Zoom: ${(k.zoom * 100).toInt()} %" + if (k.zoom <= 1f) " (subí el zoom para poder mover el encuadre)" else ""
+        volBarra.progress = (k.vol * 100).toInt()
+        volTexto.text = "Volumen: ${(k.vol * 100).toInt()} %"
+        kfInfo.text = if (s.kf.isEmpty()) "Sin keyframes: zoom, encuadre y volumen fijos en todo el tramo. Para animar: cursor en un punto, ◆ Keyframe; cursor en otro punto, cambiá los valores."
+            else "Keyframes: " + s.kf.joinToString(" · ") { Datos.reloj(ed.inicio(sel) + it.t) }
+    }
+
+    /** Aplica en la vista previa el zoom, el encuadre y los volúmenes que corresponden al cursor. */
+    private fun aplicarEncuadre() {
+        if (!::vista.isInitialized) return
+        val i = indiceActual()
+        val s = ed.segmentos.getOrNull(i)
+        val t = tiempoActual()
+        if (s == null) { vista.scaleX = 1f; vista.scaleY = 1f; vista.translationX = 0f; vista.translationY = 0f; return }
+        val k = s.encuadre((t - ed.inicio(i)).coerceAtLeast(0))
+        val lim = Interp.limite(k.zoom)
+        val px = k.px.coerceIn(-lim, lim); val py = k.py.coerceIn(-lim, lim)
+        vista.scaleX = k.zoom; vista.scaleY = k.zoom
+        vista.translationX = -k.zoom * px * vista.width
+        vista.translationY = -k.zoom * py * vista.height
+        if (s.kf.isNotEmpty()) exo?.volume = k.vol.coerceAtMost(1f)
+        if (ed.kfMusica.isNotEmpty()) exoMus?.volume = ed.volMusicaEn(t).coerceIn(0f, 1f)
+    }
+
+    private fun kfTextoEn(tx: Texto, t: Long, f: (KfT) -> KfT): Texto {
+        val n = f(tx.pos(t)).copy(t = t)
+        return tx.copy(kf = (tx.kf.filter { kotlin.math.abs(it.t - t) > 150 } + n).sortedBy { it.t })
+    }
+
+    private fun agregarKfTexto() {
+        val t = tiempoActual()
+        cambiarTexto { tx -> kfTextoEn(tx, t) { it } }
     }
 
     /** Muestra la máscara del tramo que se está viendo. */
@@ -1100,8 +1271,10 @@ class TabletActivity : Activity() {
             val clave = tx.json().toString() + "|$w|$h"
             val bmp = cacheRotulos.getOrPut(clave) { Rotulo.bitmap(this, tx, w, h) { imagenLocal(it) } ?: Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888) }
             if (iv.tag != clave) { iv.setImageBitmap(bmp); iv.tag = clave }
-            iv.translationX = tx.x * w - bmp.width / 2f
-            iv.translationY = tx.y * h - bmp.height / 2f
+            val k = tx.pos(t)
+            iv.scaleX = k.esc; iv.scaleY = k.esc
+            iv.translationX = k.x * w - bmp.width / 2f
+            iv.translationY = k.y * h - bmp.height / 2f
             iv.visibility = View.VISIBLE
             iv.alpha = if (tx.id == selTexto) 1f else 0.97f
             iv.background = if (tx.id == selTexto && exo?.isPlaying != true) GradientDrawable().apply { setStroke(ui.dp(2), Ui.amarillo) } else null
@@ -1123,7 +1296,12 @@ class TabletActivity : Activity() {
             MotionEvent.ACTION_MOVE -> {
                 val cx = (v.translationX + e.x) / w
                 val cy = (v.translationY + e.y) / h
-                ed = ed.copy(textos = ed.textos.map { if (it.id == id) it.copy(x = cx.coerceIn(0.02f, 0.98f), y = cy.coerceIn(0.02f, 0.98f)) else it })
+                val nx = cx.coerceIn(0.02f, 0.98f); val ny = cy.coerceIn(0.02f, 0.98f)
+                ed = ed.copy(textos = ed.textos.map {
+                    if (it.id != id) it
+                    else if (it.kf.isEmpty()) it.copy(x = nx, y = ny)
+                    else kfTextoEn(it, tiempoActual()) { k -> k.copy(x = nx, y = ny) }
+                })
                 dibujarTextos(false)
                 true
             }
