@@ -183,7 +183,8 @@ object Render {
     fun final(ctx: Context, clips: Map<String, Clip>, ed: Edicion, musica: File?, imagenes: (String) -> File?, listener: Transformer.Listener): Pair<Transformer, Composition> {
         val primero = clips[ed.segmentos.first().clip] ?: throw IllegalStateException("Falta el primer clip.")
         val (w, h) = Edicion.medida(ed.formato, primero.ancho, primero.alto)
-        val layout = if (ed.formato == "original") Presentation.LAYOUT_SCALE_TO_FIT else Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP
+        // Siempre entero, igual que en la vista previa: si el formato no coincide, quedan franjas negras (el zoom las tapa)
+        val layout = Presentation.LAYOUT_SCALE_TO_FIT
 
         val items = ed.segmentos.map { s ->
             val clip = clips[s.clip] ?: throw IllegalStateException("Hay un tramo de un video que ya no está en el celular.")

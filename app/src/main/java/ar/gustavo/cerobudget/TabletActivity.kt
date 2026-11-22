@@ -207,7 +207,7 @@ class TabletActivity : Activity() {
             useController = false
             setShutterBackgroundColor(Color.BLACK)
             setKeepContentOnPlayerReset(true)
-            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT   // el video se ve entero (franjas negras si no coincide el formato)
             player = exo
         }
         marco.addView(vista, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -501,7 +501,7 @@ class TabletActivity : Activity() {
             botonesFormato += clave to b
         }
         b5.addView(ff, ui.lp())
-        b5.addView(ui.texto("9:16 para reels y TikTok. Se exporta en 4K y se recorta al centro.", 13f, Ui.gris).apply { setPadding(0, ui.dp(6), 0, 0) }, ui.lp())
+        b5.addView(ui.texto("9:16 para reels y TikTok. El video se ve entero; si no coincide con el formato quedan franjas negras: subí el zoom del tramo para llenar el cuadro.", 13f, Ui.gris).apply { setPadding(0, ui.dp(6), 0, 0) }, ui.lp())
         col.addView(b5, ui.lp(10))
 
         // 6 Exportar
