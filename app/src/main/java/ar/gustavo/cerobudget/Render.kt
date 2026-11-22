@@ -194,6 +194,9 @@ object Render {
         val t = Transformer.Builder(ctx)
             .setVideoMimeType(MimeTypes.VIDEO_H264)
             .setEncoderFactory(codificador)
+            // Sin el límite de 10 s entre cuadros: en 4K, los cambios de tramo, las máscaras y la velocidad pueden tardar más
+            // y el motor abortaba con ERROR_CODE_MUXING_TIMEOUT
+            .setMaxDelayBetweenMuxerSamplesMs(C.TIME_UNSET)
             .addListener(listener)
             .build()
         return t to comp
@@ -292,6 +295,9 @@ object Render {
             .setVideoMimeType(MimeTypes.VIDEO_H265)
             .setAudioMimeType(MimeTypes.AUDIO_AAC)
             .setEncoderFactory(codificador)
+            // Sin el límite de 10 s entre cuadros: en 4K, los cambios de tramo, las máscaras y la velocidad pueden tardar más
+            // y el motor abortaba con ERROR_CODE_MUXING_TIMEOUT
+            .setMaxDelayBetweenMuxerSamplesMs(C.TIME_UNSET)
             .addListener(listener)
             .build()
         return t to comp
