@@ -45,10 +45,13 @@ class Ui(private val a: Activity) {
         text = t; isAllCaps = false; setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
         typeface = Typeface.DEFAULT_BOLD
         minHeight = dp(48); minimumHeight = dp(48)
-        setPadding(dp(10), 0, dp(10), 0)
+        setPadding(dp(6), 0, dp(6), 0)
         setTextColor(if (principal) fondo else tinta)
         background = fondoBoton(principal)
         isFocusable = false
+        // Una sola línea: si no entra, achica la letra en vez de cortar la palabra
+        maxLines = 1
+        setAutoSizeTextTypeUniformWithConfiguration(9, sp.toInt().coerceAtLeast(10), 1, TypedValue.COMPLEX_UNIT_SP)
     }
 
     /** Botón de opción: amarillo cuando está elegido. */
