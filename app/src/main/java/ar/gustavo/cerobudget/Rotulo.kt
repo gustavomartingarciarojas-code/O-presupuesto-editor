@@ -2,14 +2,19 @@ package ar.gustavo.cerobudget
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
+import java.io.File
 import kotlin.math.ceil
 
 /**
@@ -41,8 +46,59 @@ object Rotulo {
         }
     }
 
+    val EMOJIS = listOf(
+        "🔥", "⭐", "✅", "❌", "⚠️", "👉", "👈", "👆", "👇", "👍", "👏", "💪",
+        "😎", "😂", "😍", "🤯", "😱", "🙌", "🚗", "🏎️", "🛠️", "🎨", "✨", "💯",
+        "❤️", "💥", "📌", "📍", "🆕", "🔝", "🎯", "📢"
+    )
+
+    /** Dibuja un sticker de imagen: alto = tam del cuadro, sin pasarse del ancho. */
+    private fun imagen(t: Texto, ancho: Int, alto: Int, archivo: File?): Bitmap? {
+        if (archivo == null || !archivo.exists()) return null
+        val opc = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(archivo.path, opc)
+        if (opc.outWidth <= 0 || opc.outHeight <= 0) return null
+        var h = (t.tam * alto).toInt().coerceAtLeast(8)
+        var w = (opc.outWidth.toLong() * h / opc.outHeight).toInt()
+        val maxW = (ancho * 0.95f).toInt()
+        if (w > maxW) { h = (h.toLong() * maxW / w).toInt(); w = maxW }
+        var muestra = 1
+        while (opc.outWidth / (muestra * 2) >= w && opc.outHeight / (muestra * 2) >= h) muestra *= 2
+        val crudo = BitmapFactory.decodeFile(archivo.path, BitmapFactory.Options().apply { inSampleSize = muestra }) ?: return null
+        return Bitmap.createScaledBitmap(crudo, w.coerceAtLeast(1), h.coerceAtLeast(1), true)
+    }
+
+    /**
+     * Máscara de un tramo: negro alrededor y la forma transparente, con el borde difuminado.
+     * Se dibuja a la mitad del tamaño y se agranda al doble al usarla (ahorra memoria en 4K).
+     */
+    fun mascara(forma: String, tam: Float, suave: Float, ancho: Int, alto: Int): Bitmap? {
+        if (forma.isEmpty() || ancho <= 1 || alto <= 1) return null
+        val w = ancho; val h = alto
+        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val c = Canvas(bmp)
+        c.drawColor(Color.BLACK)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.BLACK
+            xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
+            val radio = suave * minOf(w, h) * 0.5f
+            if (radio >= 1f) maskFilter = BlurMaskFilter(radio, BlurMaskFilter.Blur.NORMAL)
+        }
+        val cx = w / 2f; val cy = h / 2f
+        when (forma) {
+            "circulo" -> c.drawCircle(cx, cy, tam * minOf(w, h) / 2f, p)
+            "ovalo" -> c.drawOval(RectF(cx - tam * w / 2f, cy - tam * h / 2f, cx + tam * w / 2f, cy + tam * h / 2f), p)
+            else -> {
+                val r = RectF(cx - tam * w / 2f, cy - tam * h / 2f, cx + tam * w / 2f, cy + tam * h / 2f)
+                c.drawRoundRect(r, minOf(w, h) * 0.04f, minOf(w, h) * 0.04f, p)
+            }
+        }
+        return bmp
+    }
+
     /** Imagen del texto para un cuadro de [ancho]×[alto] píxeles. Devuelve null si el texto está vacío. */
-    fun bitmap(ctx: Context, t: Texto, ancho: Int, alto: Int): Bitmap? {
+    fun bitmap(ctx: Context, t: Texto, ancho: Int, alto: Int, archivoImagen: (String) -> File? = { null }): Bitmap? {
+        if (t.tipo == "imagen") return imagen(t, ancho, alto, archivoImagen(t.texto))
         if (t.texto.isBlank() || ancho <= 0 || alto <= 0) return null
         val tam = (t.tam * alto).coerceAtLeast(6f)
         val color = try { Color.parseColor(t.color) } catch (_: Exception) { Color.WHITE }
@@ -81,7 +137,7 @@ object Rotulo {
                 armar(t.texto, borde, anchoTexto).draw(c)
                 c.restore()
             }
-            else -> paint.setShadowLayer(tam * 0.06f, 0f, tam * 0.03f, Color.argb(160, 0, 0, 0))
+            else -> if (t.tipo != "emoji") paint.setShadowLayer(tam * 0.06f, 0f, tam * 0.03f, Color.argb(160, 0, 0, 0))
         }
         c.save(); c.translate(pad.toFloat(), pad.toFloat())
         layout.draw(c)

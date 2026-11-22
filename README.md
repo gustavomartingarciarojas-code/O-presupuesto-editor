@@ -13,4 +13,6 @@ La APK se compila sola con GitHub Actions en cada cambio y queda en la versión 
 
 **Versión 0.5 · Etapa 2a:** textos sobre el video (7 tipografías libres, tamaño, color, contorno o caja, posición arrastrando, cuándo aparece y cuándo se va) y transiciones entre tramos (fundido a negro y a blanco). Se ven en la tablet igual que en el video final.
 
-Próximas etapas: 2b stickers y máscara · 3 keyframes y filtros de audio · 4 subtítulos, traducción y estabilización · 5 doblaje.
+**Versión 0.6 · Etapa 2b:** stickers (emojis), imágenes encima del video (por ejemplo un logo en PNG) y máscara por tramo (círculo, óvalo o rectángulo, con tamaño y borde difuminado).
+
+Próximas etapas: 3 keyframes y filtros de audio · 4 subtítulos, traducción y estabilización · 5 doblaje.

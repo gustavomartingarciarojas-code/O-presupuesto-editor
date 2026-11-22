@@ -26,6 +26,7 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.GridLayout
 import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -94,6 +95,14 @@ class TabletActivity : Activity() {
     private val botonesEstilo = mutableListOf<Pair<String, Button>>()
     private lateinit var tamBarra: SeekBar
     private lateinit var tamTexto: TextView
+    private val soloTexto = mutableListOf<View>()
+    private lateinit var capaMascara: ImageView
+    private val botonesMascara = mutableListOf<Pair<String, Button>>()
+    private lateinit var panelMascara: LinearLayout
+    private lateinit var mTamBarra: SeekBar
+    private lateinit var mSuaveBarra: SeekBar
+    private var claveMascara = ""
+    private val cacheMascaras = mutableMapOf<String, Bitmap>()
     private lateinit var aviso: TextView
     private lateinit var tiempo: TextView
     private lateinit var linea: SeekBar
@@ -119,6 +128,8 @@ class TabletActivity : Activity() {
     private fun dirProxies() = File(getExternalFilesDir(Environment.DIRECTORY_MOVIES), "proxies-recibidos").apply { mkdirs() }
     private fun proxyLocal(id: String) = File(dirProxies(), "$id.mp4")
     private fun musicaLocal() = File(filesDir, "musica-tablet")
+    private fun dirImagenes() = File(filesDir, "imagenes").apply { mkdirs() }
+    private fun imagenLocal(id: String): File? = id.takeIf { it.isNotEmpty() }?.let { File(dirImagenes(), it) }
     private fun tieneProxy(id: String): Boolean {
         val f = proxyLocal(id)
         val c = clipsCel.firstOrNull { it.id == id }
@@ -166,6 +177,7 @@ class TabletActivity : Activity() {
     private fun armar() {
         botonesVel.clear(); botonesFormato.clear(); conTramo.clear()
         botonesTrans.clear(); botonesFuente.clear(); botonesColor.clear(); botonesEstilo.clear(); vistasRotulos.clear()
+        soloTexto.clear(); botonesMascara.clear(); claveMascara = ""
         val horizontal = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         raiz = LinearLayout(this).apply { orientation = if (horizontal) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL; setBackgroundColor(Ui.fondo) }
 
@@ -182,6 +194,8 @@ class TabletActivity : Activity() {
             player = exo
         }
         marco.addView(vista, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        capaMascara = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_XY; visibility = View.GONE }
+        marco.addView(capaMascara, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         capaTextos = FrameLayout(this)
         marco.addView(capaTextos, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         velo = View(this).apply { setBackgroundColor(Color.BLACK); alpha = 0f; isClickable = false }
@@ -314,6 +328,37 @@ class TabletActivity : Activity() {
             conTramo += b
         }
         b3.addView(ft, ui.lp())
+        b3.addView(ui.texto("Máscara", 14f, Ui.tinta, true).apply { setPadding(0, ui.dp(10), 0, ui.dp(4)) }, ui.lp())
+        val fmk = ui.fila()
+        for ((clave, t) in listOf("" to "Ninguna", "circulo" to "Círculo", "ovalo" to "Óvalo", "rectangulo" to "Rectángulo")) {
+            val b = ui.boton(t, false, 13f)
+            b.setOnClickListener { cambiarTramo(reconstruirPlayer = false) { it.copy(mascara = clave) }; raiz.requestFocus() }
+            fmk.addView(b, ui.peso(1f, 2))
+            botonesMascara += clave to b
+            conTramo += b
+        }
+        b3.addView(fmk, ui.lp())
+        panelMascara = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        fun barraMascara(titulo: String, aplicar: (Segmento, Int) -> Segmento): SeekBar {
+            panelMascara.addView(ui.texto(titulo, 13f, Ui.gris).apply { setPadding(0, ui.dp(6), 0, 0) }, ui.lp())
+            val sb = SeekBar(this).apply {
+                max = 100
+                progressTintList = ColorStateList.valueOf(Ui.amarillo); thumbTintList = ColorStateList.valueOf(Ui.amarillo)
+                isFocusable = false
+            }
+            sb.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(s: SeekBar?, p: Int, delUsuario: Boolean) {
+                    if (delUsuario) cambiarTramo(historia = false, reconstruirPlayer = false) { aplicar(it, p) }
+                }
+                override fun onStartTrackingTouch(s: SeekBar?) { guardarHistoria() }
+                override fun onStopTrackingTouch(s: SeekBar?) { guardar(); refrescarPanel(); raiz.requestFocus() }
+            })
+            panelMascara.addView(sb, ui.lp().apply { height = ui.dp(36) })
+            return sb
+        }
+        mTamBarra = barraMascara("Tamaño de la forma") { s, p -> s.copy(mTam = 0.2f + p / 100f * 0.9f) }
+        mSuaveBarra = barraMascara("Borde difuminado") { s, p -> s.copy(mSuave = p / 100f * 0.5f) }
+        b3.addView(panelMascara, ui.lp())
         val fm = ui.fila()
         val bIzq = ui.boton("◀ Mover", false, 14f); val bDer = ui.boton("Mover ▶", false, 14f)
         bIzq.setOnClickListener { moverTramo(-1); raiz.requestFocus() }
@@ -423,6 +468,10 @@ class TabletActivity : Activity() {
                 "Del ${Datos.reloj(s.ini)} al ${Datos.reloj(s.fin)} del original · dura ${Datos.reloj(s.dura)}"
             for ((v, b) in botonesVel) ui.marcar(b, v == s.vel)
             for ((k, b) in botonesTrans) ui.marcar(b, k == s.trans)
+            for ((k, b) in botonesMascara) ui.marcar(b, k == s.mascara)
+            panelMascara.visibility = if (s.mascara.isEmpty()) View.GONE else View.VISIBLE
+            mTamBarra.progress = ((s.mTam - 0.2f) / 0.9f * 100).toInt().coerceIn(0, 100)
+            mSuaveBarra.progress = (s.mSuave / 0.5f * 100).toInt().coerceIn(0, 100)
             volBarra.progress = (s.vol * 100).toInt()
             volTexto.text = "Volumen: ${(s.vol * 100).toInt()} %"
         } else {
@@ -430,6 +479,8 @@ class TabletActivity : Activity() {
             tramoInfo.text = if (ed.segmentos.isEmpty()) "La línea de tiempo está vacía: agregá un video desde la lista." else "Tocá un tramo de la línea de tiempo."
             for ((_, b) in botonesVel) ui.marcar(b, false)
             for ((_, b) in botonesTrans) ui.marcar(b, false)
+            for ((_, b) in botonesMascara) ui.marcar(b, false)
+            panelMascara.visibility = View.GONE
         }
         refrescarTextos()
 
@@ -534,7 +585,7 @@ class TabletActivity : Activity() {
         val l = ed.segmentos.toMutableList()
         l[sel] = f(s)
         if (historia || reconstruirPlayer) cambiar(ed.copy(segmentos = l), historia, reconstruirPlayer)
-        else { ed = ed.copy(segmentos = l); refrescarTira() }
+        else { ed = ed.copy(segmentos = l); refrescarTira(); claveMascara = "" }
     }
 
     private fun refrescarTira() = dibujarTira()
@@ -747,6 +798,7 @@ class TabletActivity : Activity() {
                 val i = indiceActual()
                 if (i != ultimoIndiceTira) { ultimoIndiceTira = i; dibujarTira() }
                 dibujarTextos(false)
+                dibujarMascara()
                 val (f, color) = ed.fundido(tiempoActual())
                 velo.setBackgroundColor(if (color == "blanco") Color.WHITE else Color.BLACK)
                 velo.alpha = 1f - f
@@ -777,11 +829,21 @@ class TabletActivity : Activity() {
     // ================================================================== textos
 
     private fun armarBloqueTextos(): LinearLayout {
-        val b = ui.bloque("4  Textos")
-        val bAgregar = ui.boton("Agregar texto", true, 15f)
+        val b = ui.bloque("4  Textos y stickers")
+        val fa = ui.fila()
+        val bAgregar = ui.boton("Texto", true, 15f)
+        val bSticker = ui.boton("Sticker", true, 15f)
+        val bImagen = ui.boton("Imagen", true, 15f)
         bAgregar.setOnClickListener { agregarTexto() }
-        b.addView(bAgregar, ui.lp())
-        b.addView(ui.texto("Aparece donde está el cursor y dura 3 segundos. Arrastralo sobre el video para moverlo.", 13f, Ui.gris).apply { setPadding(0, ui.dp(6), 0, 0) }, ui.lp())
+        bSticker.setOnClickListener { elegirSticker() }
+        bImagen.setOnClickListener {
+            if (ed.segmentos.isEmpty()) { avisar("Primero agregá un video."); return@setOnClickListener }
+            val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "image/*" }
+            startActivityForResult(i, 32)
+        }
+        fa.addView(bAgregar, ui.peso(1f, 2)); fa.addView(bSticker, ui.peso(1f, 2)); fa.addView(bImagen, ui.peso(1f, 2))
+        b.addView(fa, ui.lp())
+        b.addView(ui.texto("Aparece donde está el cursor y dura 3 segundos. Arrastralo sobre el video para moverlo. La imagen puede ser un PNG con fondo transparente (por ejemplo, un logo).", 13f, Ui.gris).apply { setPadding(0, ui.dp(6), 0, 0) }, ui.lp())
         listaTextos = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         b.addView(listaTextos, ui.lp(6))
 
@@ -789,6 +851,7 @@ class TabletActivity : Activity() {
         val fe = ui.fila()
         val bEditar = ui.boton("Cambiar texto", false, 14f); val bBorrar = ui.boton("Borrar texto", false, 14f)
         bEditar.setOnClickListener { editarTexto() }
+        soloTexto += bEditar
         bBorrar.setOnClickListener { borrarTexto() }
         fe.addView(bEditar, ui.peso(1f, 2)); fe.addView(bBorrar, ui.peso(1f, 2))
         panelTexto.addView(fe, ui.lp(6))
@@ -801,7 +864,7 @@ class TabletActivity : Activity() {
         fti.addView(bDesde, ui.peso(1f, 2)); fti.addView(bHasta, ui.peso(1f, 2))
         panelTexto.addView(fti, ui.lp())
 
-        panelTexto.addView(ui.texto("Tipografía", 14f, Ui.tinta, true).apply { setPadding(0, ui.dp(10), 0, ui.dp(4)) }, ui.lp())
+        panelTexto.addView(ui.texto("Tipografía", 14f, Ui.tinta, true).apply { setPadding(0, ui.dp(10), 0, ui.dp(4)); soloTexto += this }, ui.lp())
         Rotulo.FUENTES.chunked(4).forEach { grupo ->
             val f = ui.fila()
             grupo.forEach { (clave, nombre) ->
@@ -811,6 +874,7 @@ class TabletActivity : Activity() {
                 botonesFuente += clave to bt
             }
             panelTexto.addView(f, ui.lp(4))
+            soloTexto += f
         }
 
         tamTexto = ui.texto("Tamaño", 14f, Ui.tinta, true).apply { setPadding(0, ui.dp(10), 0, 0) }
@@ -832,7 +896,7 @@ class TabletActivity : Activity() {
             override fun onStopTrackingTouch(s: SeekBar?) { guardar(); raiz.requestFocus() }
         })
 
-        panelTexto.addView(ui.texto("Color", 14f, Ui.tinta, true).apply { setPadding(0, ui.dp(10), 0, ui.dp(4)) }, ui.lp())
+        panelTexto.addView(ui.texto("Color", 14f, Ui.tinta, true).apply { setPadding(0, ui.dp(10), 0, ui.dp(4)); soloTexto += this }, ui.lp())
         val fc = ui.fila()
         Rotulo.COLORES.forEach { hex ->
             val bc = Button(this).apply {
@@ -844,8 +908,9 @@ class TabletActivity : Activity() {
             botonesColor += hex to bc
         }
         panelTexto.addView(fc, ui.lp())
+        soloTexto += fc
 
-        panelTexto.addView(ui.texto("Estilo y lugar", 14f, Ui.tinta, true).apply { setPadding(0, ui.dp(10), 0, ui.dp(4)) }, ui.lp())
+        panelTexto.addView(ui.texto("Lugar", 14f, Ui.tinta, true).apply { setPadding(0, ui.dp(10), 0, ui.dp(4)) }, ui.lp())
         val fs = ui.fila()
         for ((clave, nombre) in listOf("contorno" to "Contorno", "caja" to "Caja", "simple" to "Simple")) {
             val bs = ui.boton(nombre, false, 13f)
@@ -854,6 +919,7 @@ class TabletActivity : Activity() {
             botonesEstilo += clave to bs
         }
         panelTexto.addView(fs, ui.lp())
+        soloTexto += fs
         val fp = ui.fila()
         for ((nombre, y) in listOf("Arriba" to 0.12f, "Centro" to 0.5f, "Abajo" to 0.85f)) {
             val bp = ui.boton(nombre, false, 13f)
@@ -870,7 +936,8 @@ class TabletActivity : Activity() {
         if (ed.textos.none { it.id == selTexto }) selTexto = null
         ed.textos.sortedBy { it.ini }.forEach { t ->
             val elegido = t.id == selTexto
-            val fila = ui.texto("${Datos.reloj(t.ini)} → ${Datos.reloj(t.fin)}   ${t.texto.replace('\n', ' ')}", 14f, if (elegido) Ui.fondo else Ui.tinta).apply {
+            val etiqueta = when (t.tipo) { "imagen" -> "Imagen"; "emoji" -> "Sticker ${t.texto}"; else -> t.texto.replace('\n', ' ') }
+            val fila = ui.texto("${Datos.reloj(t.ini)} → ${Datos.reloj(t.fin)}   $etiqueta", 14f, if (elegido) Ui.fondo else Ui.tinta).apply {
                 maxLines = 1; ellipsize = TextUtils.TruncateAt.END
                 setPadding(ui.dp(10), ui.dp(8), ui.dp(10), ui.dp(8))
                 background = GradientDrawable().apply { cornerRadius = ui.dp(8).toFloat(); setColor(if (elegido) Ui.amarillo else Ui.fondo); setStroke(ui.dp(1), Ui.linea) }
@@ -881,6 +948,7 @@ class TabletActivity : Activity() {
         val t = ed.textos.firstOrNull { it.id == selTexto }
         panelTexto.visibility = if (t == null) View.GONE else View.VISIBLE
         if (t != null) {
+            soloTexto.forEach { it.visibility = if (t.tipo == "texto") View.VISIBLE else View.GONE }
             for ((k, b) in botonesFuente) ui.marcar(b, k == t.fuente)
             for ((k, b) in botonesEstilo) ui.marcar(b, k == t.estilo)
             for ((hex, b) in botonesColor) b.background = GradientDrawable().apply {
@@ -892,6 +960,69 @@ class TabletActivity : Activity() {
             tamTexto.text = "Tamaño: ${(t.tam * 1000).toInt() / 10f} % del alto".replace('.', ',')
         }
         dibujarTextos(true)
+    }
+
+    private fun elegirSticker() {
+        if (ed.segmentos.isEmpty()) { avisar("Primero agregá un video."); return }
+        exo?.pause()
+        val grilla = GridLayout(this).apply { columnCount = 8; setPadding(ui.dp(12), ui.dp(12), ui.dp(12), ui.dp(12)) }
+        val d = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Sticker")
+            .setView(android.widget.ScrollView(this).apply { addView(grilla) })
+            .setNegativeButton("Cancelar") { _, _ -> raiz.requestFocus() }
+            .create()
+        Rotulo.EMOJIS.forEach { e ->
+            grilla.addView(TextView(this).apply {
+                text = e; setTextSize(TypedValue.COMPLEX_UNIT_SP, 30f); gravity = Gravity.CENTER
+                setPadding(ui.dp(6), ui.dp(6), ui.dp(6), ui.dp(6))
+                setOnClickListener {
+                    d.dismiss()
+                    val ini = tiempoActual()
+                    val t = Texto("t" + System.currentTimeMillis().toString(36), e, ini, (ini + 3000).coerceAtMost(ed.total.coerceAtLeast(ini + 500)),
+                        x = 0.5f, y = 0.5f, tam = 0.15f, estilo = "simple", tipo = "emoji")
+                    selTexto = t.id
+                    cambiar(ed.copy(textos = ed.textos + t), reconstruirPlayer = false)
+                    raiz.requestFocus()
+                }
+            })
+        }
+        d.show()
+    }
+
+    private fun agregarImagen(u: Uri) {
+        val id = "i" + System.currentTimeMillis().toString(36)
+        try {
+            contentResolver.openInputStream(u)?.use { inp -> File(dirImagenes(), id).outputStream().use { inp.copyTo(it) } }
+                ?: throw IllegalStateException("No se pudo leer la imagen.")
+            val ini = tiempoActual()
+            val t = Texto("t" + System.currentTimeMillis().toString(36), id, ini, (ini + 3000).coerceAtMost(ed.total.coerceAtLeast(ini + 500)),
+                x = 0.5f, y = 0.5f, tam = 0.3f, estilo = "simple", tipo = "imagen")
+            selTexto = t.id
+            cambiar(ed.copy(textos = ed.textos + t), reconstruirPlayer = false)
+        } catch (e: Exception) {
+            avisar("No pude usar esa imagen: ${e.message}")
+        }
+    }
+
+    /** Muestra la máscara del tramo que se está viendo. */
+    private fun dibujarMascara() {
+        if (!::capaMascara.isInitialized) return
+        val s = ed.segmentos.getOrNull(indiceActual())
+        val w = capaMascara.width.takeIf { it > 0 } ?: marco.width
+        val h = capaMascara.height.takeIf { it > 0 } ?: marco.height
+        if (s == null || s.mascara.isEmpty() || w <= 0 || h <= 0) {
+            if (capaMascara.visibility != View.GONE) capaMascara.visibility = View.GONE
+            claveMascara = ""
+            return
+        }
+        val clave = "${s.mascara}|${s.mTam}|${s.mSuave}|$w|$h"
+        if (clave != claveMascara) {
+            if (cacheMascaras.size > 20) cacheMascaras.clear()
+            val bmp = cacheMascaras.getOrPut(clave) { Rotulo.mascara(s.mascara, s.mTam, s.mSuave, w / 2, h / 2) ?: Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888) }
+            capaMascara.setImageBitmap(bmp)
+            claveMascara = clave
+        }
+        capaMascara.visibility = View.VISIBLE
     }
 
     private fun pedirTexto(inicial: String, listo: (String) -> Unit) {
@@ -966,7 +1097,7 @@ class TabletActivity : Activity() {
             }
             if (!visible) { iv.visibility = View.GONE; continue }
             val clave = tx.json().toString() + "|$w|$h"
-            val bmp = cacheRotulos.getOrPut(clave) { Rotulo.bitmap(this, tx, w, h) ?: Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888) }
+            val bmp = cacheRotulos.getOrPut(clave) { Rotulo.bitmap(this, tx, w, h) { imagenLocal(it) } ?: Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888) }
             if (iv.tag != clave) { iv.setImageBitmap(bmp); iv.tag = clave }
             iv.translationX = tx.x * w - bmp.width / 2f
             iv.translationY = tx.y * h - bmp.height / 2f
@@ -1004,7 +1135,9 @@ class TabletActivity : Activity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != 31 || resultCode != RESULT_OK) return
+        if (resultCode != RESULT_OK) return
+        if (requestCode == 32) { data?.data?.let { agregarImagen(it) }; return }
+        if (requestCode != 31) return
         val u = data?.data ?: return
         val (nombre, _) = Datos.nombreDe(this, u)
         try {
@@ -1138,6 +1271,18 @@ class TabletActivity : Activity() {
                     c.outputStream.use { o -> f.inputStream().use { it.copyTo(o) } }
                     if (c.responseCode != 200) throw IllegalStateException("el celular no recibió la música (${c.responseCode})")
                     c.disconnect()
+                }
+                val imagenes = edicion.textos.filter { it.tipo == "imagen" }.map { it.texto }.distinct()
+                for (id in imagenes) {
+                    val f = imagenLocal(id) ?: continue
+                    if (!f.exists()) continue
+                    runOnUiThread { expEstado.text = "Mandando las imágenes al celular…" }
+                    val ci = abrir("$base/imagen?id=${URLEncoder.encode(id, "UTF-8")}", 60_000)
+                    ci.requestMethod = "POST"; ci.doOutput = true
+                    ci.setFixedLengthStreamingMode(f.length())
+                    ci.outputStream.use { o -> f.inputStream().use { it.copyTo(o) } }
+                    if (ci.responseCode != 200) throw IllegalStateException("el celular no recibió una imagen (${ci.responseCode})")
+                    ci.disconnect()
                 }
                 val cuerpo = edicion.json().toString().toByteArray(Charsets.UTF_8)
                 val c = abrir("$base/exportar?musica=${if (conMusica) 1 else 0}")

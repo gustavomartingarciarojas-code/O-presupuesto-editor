@@ -59,6 +59,8 @@ class CelularActivity : Activity(), Servidor.Rutas {
     private fun archivoProxy(id: String) = File(dirProxies(), "$id.mp4")
     private fun archivoMusica() = File(filesDir, "musica-actual")
     private fun archivoClips() = File(filesDir, "clips.json")
+    private fun dirImagenes() = File(filesDir, "imagenes").apply { mkdirs() }
+    private fun archivoImagen(id: String): File? = id.takeIf { it.matches(Regex("[A-Za-z0-9_.-]+")) }?.let { File(dirImagenes(), it) }
 
     // ================================================================== inicio
 
@@ -326,6 +328,14 @@ class CelularActivity : Activity(), Servidor.Rutas {
                 tmp.renameTo(archivoMusica())
                 Servidor.Respuesta.json("{\"ok\":true}")
             }
+            "/imagen" -> {
+                val f = archivoImagen(params["id"] ?: "") ?: return Servidor.Respuesta.texto("Nombre de imagen inválido.", 409)
+                val tmp = File(f.path + ".subiendo")
+                tmp.outputStream().use { cuerpo.copyTo(it, 256 * 1024) }
+                if (largo > 0 && tmp.length() != largo) { tmp.delete(); throw IllegalStateException("La imagen llegó incompleta.") }
+                f.delete(); tmp.renameTo(f)
+                Servidor.Respuesta.json("{\"ok\":true}")
+            }
             "/exportar" -> {
                 val txt = cuerpo.bufferedReader().use { it.readText() }
                 val ed = Edicion.de(JSONObject(txt))
@@ -380,7 +390,7 @@ class CelularActivity : Activity(), Servidor.Rutas {
         expEstado.setTextColor(Ui.gris)
         expEstado.text = "Preparando…"
         try {
-            val (t, comp) = Render.final(this, mapa, ed, if (conMusica) archivoMusica() else null, object : Transformer.Listener {
+            val (t, comp) = Render.final(this, mapa, ed, if (conMusica) archivoMusica() else null, { archivoImagen(it) }, object : Transformer.Listener {
                 override fun onCompleted(composition: Composition, exportResult: ExportResult) {
                     finalListo(salida)
                 }

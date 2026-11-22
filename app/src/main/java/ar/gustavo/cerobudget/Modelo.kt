@@ -43,21 +43,25 @@ data class Segmento(
     val fin: Long,
     val vel: Float = 1f,
     val vol: Float = 1f, // 1 = 100 %
-    val trans: String = "corte" // transición al entrar en este tramo: corte · negro · blanco
+    val trans: String = "corte", // transición al entrar en este tramo: corte · negro · blanco
+    val mascara: String = "",    // "" sin máscara · circulo · ovalo · rectangulo
+    val mTam: Float = 0.7f,      // tamaño de la forma, fracción del cuadro
+    val mSuave: Float = 0.15f    // borde difuminado, 0 a 0,5
 ) {
     /** Lo que dura en la línea de tiempo (la velocidad lo acorta o lo alarga). */
     val dura: Long get() = ((fin - ini) / vel).toLong()
 
     fun json(): JSONObject = JSONObject().apply {
         put("clip", clip); put("ini", ini); put("fin", fin); put("vel", vel.toDouble()); put("vol", vol.toDouble())
-        put("trans", trans)
+        put("trans", trans); put("mascara", mascara); put("mTam", mTam.toDouble()); put("mSuave", mSuave.toDouble())
     }
 
     companion object {
         fun de(j: JSONObject) = Segmento(
             j.getString("clip"), j.getLong("ini"), j.getLong("fin"),
             j.optDouble("vel", 1.0).toFloat(), j.optDouble("vol", 1.0).toFloat(),
-            j.optString("trans", "corte")
+            j.optString("trans", "corte"), j.optString("mascara", ""),
+            j.optDouble("mTam", 0.7).toFloat(), j.optDouble("mSuave", 0.15).toFloat()
         )
     }
 }
@@ -73,19 +77,21 @@ data class Texto(
     val tam: Float = 0.07f, // alto de la letra, fracción del alto del video
     val fuente: String = "Poppins-Bold",
     val color: String = "#FFFFFF",
-    val estilo: String = "contorno" // contorno · caja · simple
+    val estilo: String = "contorno", // contorno · caja · simple
+    val tipo: String = "texto"       // texto · emoji · imagen (en imagen, "texto" es el nombre del archivo)
 ) {
     fun json(): JSONObject = JSONObject().apply {
         put("id", id); put("texto", texto); put("ini", ini); put("fin", fin)
         put("x", x.toDouble()); put("y", y.toDouble()); put("tam", tam.toDouble())
-        put("fuente", fuente); put("color", color); put("estilo", estilo)
+        put("fuente", fuente); put("color", color); put("estilo", estilo); put("tipo", tipo)
     }
 
     companion object {
         fun de(j: JSONObject) = Texto(
             j.getString("id"), j.optString("texto", ""), j.optLong("ini"), j.optLong("fin"),
             j.optDouble("x", 0.5).toFloat(), j.optDouble("y", 0.8).toFloat(), j.optDouble("tam", 0.07).toFloat(),
-            j.optString("fuente", "Poppins-Bold"), j.optString("color", "#FFFFFF"), j.optString("estilo", "contorno")
+            j.optString("fuente", "Poppins-Bold"), j.optString("color", "#FFFFFF"), j.optString("estilo", "contorno"),
+            j.optString("tipo", "texto")
         )
     }
 }

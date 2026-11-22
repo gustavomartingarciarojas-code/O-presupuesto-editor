@@ -49,6 +49,17 @@ object Render {
             if (presentationTimeUs in desde..hasta) visible else oculto
     }
 
+    /** Máscara de un tramo, visible solo mientras dura ese tramo. Está dibujada a la mitad y se agranda al doble. */
+    private class MascaraOverlay(private val bmp: Bitmap, desdeMs: Long, hastaMs: Long) : BitmapOverlay() {
+        private val desde = desdeMs * 1000
+        private val hasta = hastaMs * 1000
+        private val visible = OverlaySettings.Builder().setScale(2f, 2f).build()
+        private val oculto = OverlaySettings.Builder().setScale(2f, 2f).setAlphaScale(0f).build()
+        override fun getBitmap(presentationTimeUs: Long): Bitmap = bmp
+        override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings =
+            if (presentationTimeUs in desde until hasta) visible else oculto
+    }
+
     /** Fundidos a negro o a blanco en los cortes que tienen transición. */
     private class Fundidos(private val ed: Edicion) : RgbMatrix {
         private val m = FloatArray(16)
@@ -98,7 +109,7 @@ object Render {
 
     // ------------------------------------------------------------------ video final
 
-    fun final(ctx: Context, clips: Map<String, Clip>, ed: Edicion, musica: File?, listener: Transformer.Listener): Pair<Transformer, Composition> {
+    fun final(ctx: Context, clips: Map<String, Clip>, ed: Edicion, musica: File?, imagenes: (String) -> File?, listener: Transformer.Listener): Pair<Transformer, Composition> {
         val primero = clips[ed.segmentos.first().clip] ?: throw IllegalStateException("Falta el primer clip.")
         val (w, h) = Edicion.medida(ed.formato, primero.ancho, primero.alto)
         val layout = if (ed.formato == "original") Presentation.LAYOUT_SCALE_TO_FIT else Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP
@@ -133,8 +144,20 @@ object Render {
         }
         // Efectos sobre todo el video ya armado: textos y fundidos (con los tiempos de la línea de tiempo)
         val generales = mutableListOf<Effect>()
-        val rotulos = ed.textos.mapNotNull { t -> Rotulo.bitmap(ctx, t, w, h)?.let { RotuloOverlay(it, t) as TextureOverlay } }
-        if (rotulos.isNotEmpty()) generales += OverlayEffect(rotulos)
+        val capas = mutableListOf<TextureOverlay>()
+        // Primero las máscaras de los tramos (debajo), después textos y stickers (encima)
+        val mascaras = mutableMapOf<String, Bitmap>()
+        var acc = 0L
+        for (s in ed.segmentos) {
+            if (s.mascara.isNotEmpty()) {
+                val clave = "${s.mascara}|${s.mTam}|${s.mSuave}"
+                val bmp = mascaras[clave] ?: Rotulo.mascara(s.mascara, s.mTam, s.mSuave, w / 2, h / 2)?.also { mascaras[clave] = it }
+                if (bmp != null) capas += MascaraOverlay(bmp, acc, acc + s.dura)
+            }
+            acc += s.dura
+        }
+        ed.textos.forEach { t -> Rotulo.bitmap(ctx, t, w, h, imagenes)?.let { capas += RotuloOverlay(it, t) } }
+        if (capas.isNotEmpty()) generales += OverlayEffect(capas)
         if (ed.segmentos.any { it.trans != "corte" }) generales += Fundidos(ed)
 
         val comp = Composition.Builder(secuencias)
