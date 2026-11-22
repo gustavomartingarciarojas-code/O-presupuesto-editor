@@ -1,6 +1,7 @@
 package ar.gustavo.cerobudget
 
 import org.json.JSONArray
+import kotlin.math.roundToInt
 import org.json.JSONObject
 
 /** Un video crudo que está en el celular. */
@@ -95,13 +96,16 @@ data class Segmento(
     val vel: Float = 1f,
     val vol: Float = 1f, // 1 = 100 %
     val trans: String = "corte", // transición al entrar en este tramo: corte · negro · blanco
-    val mascara: String = "",    // "" sin máscara · circulo · ovalo · rectangulo
-    val mTam: Float = 0.7f,      // tamaño de la forma, fracción del cuadro
+    val mascara: String = "",    // "" sin máscara · horizontal · reflejo · circulo · ovalo · rectangulo
+    val mTam: Float = 0.7f,      // tamaño de la forma, fracción del cuadro (0 = cerrada del todo)
     val mSuave: Float = 0.15f,   // borde difuminado, 0 a 0,5
     val zoom: Float = 1f,        // zoom y encuadre fijos (cuando no hay keyframes)
     val px: Float = 0f,
     val py: Float = 0f,
-    val kf: List<Kf> = emptyList()
+    val kf: List<Kf> = emptyList(),
+    val mX: Float = 0.5f,        // centro de la máscara, 0 a 1 del ancho
+    val mY: Float = 0.5f,        // centro de la máscara, 0 a 1 del alto
+    val mAng: Float = 0f         // giro de la máscara en grados (+ a la derecha, − a la izquierda)
 ) {
     /** Zoom, encuadre y volumen en el ms tRel desde el inicio del tramo (en tiempo de línea). */
     fun encuadre(tRel: Long): Kf = Interp.en(kf, tRel, { it.t }) { a, b, u ->
@@ -118,6 +122,7 @@ data class Segmento(
         put("trans", trans); put("mascara", mascara); put("mTam", mTam.toDouble()); put("mSuave", mSuave.toDouble())
         put("zoom", zoom.toDouble()); put("px", px.toDouble()); put("py", py.toDouble())
         put("kf", JSONArray().apply { kf.forEach { put(it.json()) } })
+        put("mX", mX.toDouble()); put("mY", mY.toDouble()); put("mAng", mAng.toDouble())
     }
 
     companion object {
@@ -127,8 +132,26 @@ data class Segmento(
             j.optString("trans", "corte"), j.optString("mascara", ""),
             j.optDouble("mTam", 0.7).toFloat(), j.optDouble("mSuave", 0.15).toFloat(),
             j.optDouble("zoom", 1.0).toFloat(), j.optDouble("px", 0.0).toFloat(), j.optDouble("py", 0.0).toFloat(),
-            arr(j.optJSONArray("kf")).let { a -> List(a.length()) { Kf.de(a.getJSONObject(it)) } }
+            arr(j.optJSONArray("kf")).let { a -> List(a.length()) { Kf.de(a.getJSONObject(it)) } },
+            j.optDouble("mX", 0.5).toFloat(), j.optDouble("mY", 0.5).toFloat(), j.optDouble("mAng", 0.0).toFloat()
         )
+
+        /** Velocidad para mostrar: 0,1× · 0,55× · 2,5× · 10× · 100×. */
+        fun textoVel(v: Float): String {
+            val t = when {
+                v < 1f -> String.format(java.util.Locale.US, "%.2f", v).trimEnd('0').trimEnd('.')
+                v < 10f -> String.format(java.util.Locale.US, "%.1f", v).trimEnd('0').trimEnd('.')
+                else -> v.roundToInt().toString()
+            }
+            return t.replace('.', ',') + "×"
+        }
+
+        /** Redondea la velocidad a pasos cómodos según el rango. */
+        fun redondearVel(v: Float): Float = when {
+            v < 1f -> (v * 20f).roundToInt() / 20f
+            v < 10f -> (v * 10f).roundToInt() / 10f
+            else -> v.roundToInt().toFloat()
+        }.coerceIn(0.1f, 100f)
     }
 }
 

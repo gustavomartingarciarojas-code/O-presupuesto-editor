@@ -72,3 +72,54 @@ class Manijas(ctx: Context, private val ui: Ui) : View(ctx) {
         }
     }
 }
+
+/**
+ * Guía amarilla de la máscara del tramo elegido (como en CapCut): las líneas o la forma, girada,
+ * y el punto del centro, que se arrastra para mover la máscara. Solo dibuja.
+ */
+@SuppressLint("ViewConstructor")
+class GuiaMascara(ctx: Context, private val ui: Ui) : View(ctx) {
+
+    /** Lo que se dibuja: forma, tamaño, centro (0 a 1) y ángulo. null = no se muestra. */
+    var datos: Segmento? = null
+        set(v) {
+            val antes = field
+            field = v
+            if (antes?.mascara != v?.mascara || antes?.mTam != v?.mTam || antes?.mX != v?.mX || antes?.mY != v?.mY || antes?.mAng != v?.mAng) invalidate()
+        }
+
+    private val amarillo = Color.parseColor("#FFE600")
+    private val pLinea = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = amarillo; strokeWidth = ui.dp(2).toFloat() }
+    private val pTexto = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = ui.dp(14).toFloat(); setShadowLayer(4f, 0f, 0f, Color.BLACK) }
+    private val r = RectF()
+
+    init { isClickable = false; isFocusable = false }
+
+    fun centro(): Pair<Float, Float>? = datos?.let { it.mX * width to it.mY * height }
+
+    /** ¿El dedo o el mouse está sobre el punto del centro? */
+    fun tocaCentro(x: Float, y: Float): Boolean {
+        val (cx, cy) = centro() ?: return false
+        return abs(x - cx) <= ui.dp(26) && abs(y - cy) <= ui.dp(26)
+    }
+
+    override fun onDraw(c: Canvas) {
+        val s = datos ?: return
+        if (s.mascara.isEmpty() || width <= 0) return
+        val w = width.toFloat(); val h = height.toFloat()
+        val cx = s.mX * w; val cy = s.mY * h
+        val lejos = (w + h) * 2f
+        c.save()
+        c.rotate(s.mAng, cx, cy)
+        when (s.mascara) {
+            "horizontal" -> c.drawLine(cx - lejos, cy, cx + lejos, cy, pLinea)
+            "reflejo" -> { val d = s.mTam * h / 2f; c.drawLine(cx - lejos, cy - d, cx + lejos, cy - d, pLinea); c.drawLine(cx - lejos, cy + d, cx + lejos, cy + d, pLinea) }
+            "circulo" -> c.drawCircle(cx, cy, s.mTam * minOf(w, h) / 2f, pLinea)
+            "ovalo" -> { r.set(cx - s.mTam * w / 2f, cy - s.mTam * h / 2f, cx + s.mTam * w / 2f, cy + s.mTam * h / 2f); c.drawOval(r, pLinea) }
+            else -> { r.set(cx - s.mTam * w / 2f, cy - s.mTam * h / 2f, cx + s.mTam * w / 2f, cy + s.mTam * h / 2f); c.drawRect(r, pLinea) }
+        }
+        c.restore()
+        c.drawCircle(cx, cy, ui.dp(8).toFloat(), pLinea)
+        if (s.mAng != 0f) c.drawText("${s.mAng.toInt()}°", cx + ui.dp(14), cy - ui.dp(14), pTexto)
+    }
+}

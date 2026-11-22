@@ -72,7 +72,7 @@ object Rotulo {
      * Máscara de un tramo: negro alrededor y la forma transparente, con el borde difuminado.
      * Se dibuja a la mitad del tamaño y se agranda al doble al usarla (ahorra memoria en 4K).
      */
-    fun mascara(forma: String, tam: Float, suave: Float, ancho: Int, alto: Int): Bitmap? {
+    fun mascara(forma: String, tam: Float, suave: Float, ancho: Int, alto: Int, centroX: Float = 0.5f, centroY: Float = 0.5f, angulo: Float = 0f): Bitmap? {
         if (forma.isEmpty() || ancho <= 1 || alto <= 1) return null
         val w = ancho; val h = alto
         val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
@@ -84,15 +84,24 @@ object Rotulo {
             val radio = suave * minOf(w, h) * 0.5f
             if (radio >= 1f) maskFilter = BlurMaskFilter(radio, BlurMaskFilter.Blur.NORMAL)
         }
-        val cx = w / 2f; val cy = h / 2f
+        // Centro donde lo puso el usuario y giro alrededor de ese centro
+        val cx = centroX * w; val cy = centroY * h
+        val lejos = (w + h) * 2f
+        c.save()
+        c.rotate(angulo, cx, cy)
         when (forma) {
-            "circulo" -> c.drawCircle(cx, cy, tam * minOf(w, h) / 2f, p)
-            "ovalo" -> c.drawOval(RectF(cx - tam * w / 2f, cy - tam * h / 2f, cx + tam * w / 2f, cy + tam * h / 2f), p)
-            else -> {
+            // Horizontal: se ve todo lo que queda de un lado de la línea
+            "horizontal" -> c.drawRect(cx - lejos, cy - lejos, cx + lejos, cy, p)
+            // Reflejo: se ve la franja entre dos líneas paralelas; con tamaño 0 se cierra del todo
+            "reflejo" -> if (tam > 0f) c.drawRect(cx - lejos, cy - tam * h / 2f, cx + lejos, cy + tam * h / 2f, p)
+            "circulo" -> if (tam > 0f) c.drawCircle(cx, cy, tam * minOf(w, h) / 2f, p)
+            "ovalo" -> if (tam > 0f) c.drawOval(RectF(cx - tam * w / 2f, cy - tam * h / 2f, cx + tam * w / 2f, cy + tam * h / 2f), p)
+            else -> if (tam > 0f) {
                 val r = RectF(cx - tam * w / 2f, cy - tam * h / 2f, cx + tam * w / 2f, cy + tam * h / 2f)
                 c.drawRoundRect(r, minOf(w, h) * 0.04f, minOf(w, h) * 0.04f, p)
             }
         }
+        c.restore()
         return bmp
     }
 

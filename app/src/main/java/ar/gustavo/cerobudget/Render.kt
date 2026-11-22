@@ -243,8 +243,8 @@ object Render {
         var acc = 0L
         for (s in ed.segmentos) {
             if (s.mascara.isNotEmpty()) {
-                val clave = "${s.mascara}|${s.mTam}|${s.mSuave}"
-                val bmp = mascaras[clave] ?: Rotulo.mascara(s.mascara, s.mTam, s.mSuave, w / 2, h / 2)?.also { mascaras[clave] = it }
+                val clave = "${s.mascara}|${s.mTam}|${s.mSuave}|${s.mX}|${s.mY}|${s.mAng}"
+                val bmp = mascaras[clave] ?: Rotulo.mascara(s.mascara, s.mTam, s.mSuave, w / 2, h / 2, s.mX, s.mY, s.mAng)?.also { mascaras[clave] = it }
                 if (bmp != null) capas += MascaraOverlay(bmp, acc, acc + s.dura)
             }
             acc += s.dura

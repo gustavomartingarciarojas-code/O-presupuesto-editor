@@ -88,6 +88,13 @@ class TabletActivity : Activity() {
     private lateinit var vista: PlayerView
     private lateinit var capaTextos: FrameLayout
     private lateinit var manijas: Manijas
+    private lateinit var guiaMascara: GuiaMascara
+    private lateinit var velBarra: SeekBar
+    private lateinit var velTexto: TextView
+    private lateinit var mXBarra: SeekBar
+    private lateinit var mYBarra: SeekBar
+    private lateinit var mAngBarra: SeekBar
+    private lateinit var mAngTexto: TextView
     private lateinit var velo: View
     private val botonesTrans = mutableListOf<Pair<String, Button>>()
     private lateinit var panelTexto: LinearLayout
@@ -208,6 +215,8 @@ class TabletActivity : Activity() {
         marco.addView(capaTextos, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         manijas = Manijas(this, ui)
         marco.addView(manijas, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        guiaMascara = GuiaMascara(this, ui)
+        marco.addView(guiaMascara, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         velo = View(this).apply { setBackgroundColor(Color.BLACK); alpha = 0f; isClickable = false }
         marco.addView(velo, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         capaTextos.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, orr, ob -> if (r - l != orr - ol || b - t != ob - ot) manejador.post { dibujarTextos(true) } }
@@ -285,17 +294,36 @@ class TabletActivity : Activity() {
         val b3 = ui.bloque("3  Tramo elegido")
         tramoInfo = ui.texto("Tocá un tramo de la línea de tiempo.", 14f, Ui.gris)
         b3.addView(tramoInfo, ui.lp())
-        b3.addView(ui.texto("Velocidad", 14f, Ui.tinta, true).apply { setPadding(0, ui.dp(10), 0, ui.dp(4)) }, ui.lp())
+        velTexto = ui.texto("Velocidad", 14f, Ui.tinta, true).apply { setPadding(0, ui.dp(10), 0, ui.dp(4)) }
+        b3.addView(velTexto, ui.lp())
         val fv = ui.fila()
-        for (v in listOf(0.5f, 1f, 1.5f, 2f, 3f)) {
-            val t = if (v == 0.5f) "0,5×" else if (v == 1.5f) "1,5×" else "${v.toInt()}×"
-            val b = ui.boton(t, false, 14f)
+        for (v in listOf(0.1f, 1f, 2f, 5f, 10f, 100f)) {
+            val b = ui.boton(Segmento.textoVel(v), false, 14f)
             b.setOnClickListener { cambiarTramo { it.copy(vel = v) }; raiz.requestFocus() }
             fv.addView(b, ui.peso(1f, 2))
             botonesVel += v to b
             conTramo += b
         }
         b3.addView(fv, ui.lp())
+        // Barra de velocidad en escala logarítmica: 0,1× a la izquierda, 1× a un tercio, 10× a dos tercios, 100× a la derecha
+        velBarra = SeekBar(this).apply {
+            max = 1000
+            progressTintList = ColorStateList.valueOf(Ui.amarillo); thumbTintList = ColorStateList.valueOf(Ui.amarillo)
+            isFocusable = false
+        }
+        b3.addView(velBarra, ui.lp(2).apply { height = ui.dp(40) })
+        b3.addView(ui.texto("0,1×                1×                10×                100×", 12f, Ui.gris), ui.lp())
+        conTramo += velBarra
+        velBarra.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar?, p: Int, delUsuario: Boolean) {
+                if (!delUsuario) return
+                val v = Segmento.redondearVel((0.1 * Math.pow(10.0, p / 1000.0 * 3.0)).toFloat())
+                velTexto.text = "Velocidad: " + Segmento.textoVel(v)
+                cambiarTramo(historia = false, reconstruirPlayer = false) { it.copy(vel = v) }
+            }
+            override fun onStartTrackingTouch(s: SeekBar?) { guardarHistoria() }
+            override fun onStopTrackingTouch(s: SeekBar?) { cambiar(ed, historia = false); raiz.requestFocus() }
+        })
         volTexto = ui.texto("Volumen: 100 %", 14f, Ui.tinta, true).apply { setPadding(0, ui.dp(10), 0, 0) }
         b3.addView(volTexto, ui.lp())
         volBarra = SeekBar(this).apply {
@@ -326,26 +354,32 @@ class TabletActivity : Activity() {
         }
         b3.addView(ft, ui.lp())
         b3.addView(ui.texto("Máscara", 14f, Ui.tinta, true).apply { setPadding(0, ui.dp(10), 0, ui.dp(4)) }, ui.lp())
-        val fmk = ui.fila()
-        for ((clave, t) in listOf("" to "Ninguna", "circulo" to "Círculo", "ovalo" to "Óvalo", "rectangulo" to "Rectángulo")) {
-            val b = ui.boton(t, false, 13f)
-            b.setOnClickListener { cambiarTramo(reconstruirPlayer = false) { it.copy(mascara = clave) }; raiz.requestFocus() }
-            fmk.addView(b, ui.peso(1f, 2))
-            botonesMascara += clave to b
-            conTramo += b
+        listOf(listOf("" to "Ninguna", "horizontal" to "Horizontal", "reflejo" to "Reflejo"),
+            listOf("circulo" to "Círculo", "ovalo" to "Óvalo", "rectangulo" to "Rectángulo")).forEachIndexed { fi, grupo ->
+            val fmk = ui.fila()
+            for ((clave, t) in grupo) {
+                val b = ui.boton(t, false, 13f)
+                b.setOnClickListener {
+                    cambiarTramo(reconstruirPlayer = false) { s -> if (s.mascara.isEmpty() && clave == "reflejo") s.copy(mascara = clave, mTam = 0.3f) else s.copy(mascara = clave) }
+                    raiz.requestFocus()
+                }
+                fmk.addView(b, ui.peso(1f, 2))
+                botonesMascara += clave to b
+                conTramo += b
+            }
+            b3.addView(fmk, ui.lp(if (fi == 0) 0 else 4))
         }
-        b3.addView(fmk, ui.lp())
         panelMascara = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        fun barraMascara(titulo: String, aplicar: (Segmento, Int) -> Segmento): SeekBar {
+        fun barraMascara(titulo: String, maximo: Int = 100, aplicar: (Segmento, Int) -> Segmento): SeekBar {
             panelMascara.addView(ui.texto(titulo, 13f, Ui.gris).apply { setPadding(0, ui.dp(6), 0, 0) }, ui.lp())
             val sb = SeekBar(this).apply {
-                max = 100
+                max = maximo
                 progressTintList = ColorStateList.valueOf(Ui.amarillo); thumbTintList = ColorStateList.valueOf(Ui.amarillo)
                 isFocusable = false
             }
             sb.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(s: SeekBar?, p: Int, delUsuario: Boolean) {
-                    if (delUsuario) cambiarTramo(historia = false, reconstruirPlayer = false) { aplicar(it, p) }
+                    if (delUsuario) { cambiarTramo(historia = false, reconstruirPlayer = false) { aplicar(it, p) }; textosMascara() }
                 }
                 override fun onStartTrackingTouch(s: SeekBar?) { guardarHistoria() }
                 override fun onStopTrackingTouch(s: SeekBar?) { guardar(); refrescarPanel(); raiz.requestFocus() }
@@ -353,8 +387,17 @@ class TabletActivity : Activity() {
             panelMascara.addView(sb, ui.lp().apply { height = ui.dp(36) })
             return sb
         }
-        mTamBarra = barraMascara("Tamaño de la forma") { s, p -> s.copy(mTam = 0.2f + p / 100f * 0.9f) }
+        panelMascara.addView(ui.texto("En el video: arrastrá el punto amarillo para mover la máscara.", 13f, Ui.gris).apply { setPadding(0, ui.dp(6), 0, 0) }, ui.lp())
+        mTamBarra = barraMascara("Tamaño (todo a la izquierda = cerrada del todo)") { s, p -> s.copy(mTam = p / 100f * 1.1f) }
         mSuaveBarra = barraMascara("Borde difuminado") { s, p -> s.copy(mSuave = p / 100f * 0.5f) }
+        mXBarra = barraMascara("Posición horizontal (izquierda ↔ derecha)") { s, p -> s.copy(mX = p / 100f) }
+        mYBarra = barraMascara("Posición vertical (arriba ↔ abajo)") { s, p -> s.copy(mY = p / 100f) }
+        mAngTexto = ui.texto("", 13f, Ui.tinta, true).apply { setPadding(0, ui.dp(8), 0, 0) }
+        panelMascara.addView(mAngTexto, ui.lp())
+        mAngBarra = barraMascara("Giro (− izquierda ↔ + derecha)", 360) { s, p -> s.copy(mAng = (p - 180).toFloat()) }
+        val bCentrar = ui.boton("Centrar y enderezar", false, 13f)
+        bCentrar.setOnClickListener { cambiarTramo(reconstruirPlayer = false) { it.copy(mX = 0.5f, mY = 0.5f, mAng = 0f) }; raiz.requestFocus() }
+        panelMascara.addView(bCentrar, ui.lp(6))
         b3.addView(panelMascara, ui.lp())
 
         // Zoom, encuadre y keyframes del tramo
@@ -496,16 +539,23 @@ class TabletActivity : Activity() {
             tramoInfo.text = "Tramo ${sel + 1} de ${ed.segmentos.size} · ${nombreClip(s.clip)}\n" +
                 "Del ${Datos.reloj(s.ini)} al ${Datos.reloj(s.fin)} del original · dura ${Datos.reloj(s.dura)}"
             for ((v, b) in botonesVel) ui.marcar(b, v == s.vel)
+            velTexto.text = "Velocidad: " + Segmento.textoVel(s.vel)
+            velBarra.progress = (kotlin.math.log10(s.vel / 0.1) / 3.0 * 1000).toInt().coerceIn(0, 1000)
+            mXBarra.progress = (s.mX * 100).toInt().coerceIn(0, 100)
+            mYBarra.progress = (s.mY * 100).toInt().coerceIn(0, 100)
+            mAngBarra.progress = (s.mAng + 180).toInt().coerceIn(0, 360)
+            textosMascara()
             for ((k, b) in botonesTrans) ui.marcar(b, k == s.trans)
             for ((k, b) in botonesMascara) ui.marcar(b, k == s.mascara)
             panelMascara.visibility = if (s.mascara.isEmpty()) View.GONE else View.VISIBLE
-            mTamBarra.progress = ((s.mTam - 0.2f) / 0.9f * 100).toInt().coerceIn(0, 100)
+            mTamBarra.progress = (s.mTam / 1.1f * 100).toInt().coerceIn(0, 100)
             mSuaveBarra.progress = (s.mSuave / 0.5f * 100).toInt().coerceIn(0, 100)
             refrescarEncuadre()
         } else {
             tramoInfo.setTextColor(Ui.gris)
             tramoInfo.text = if (ed.segmentos.isEmpty()) "La línea de tiempo está vacía: agregá un video desde la lista." else "Tocá un tramo de la línea de tiempo."
             for ((_, b) in botonesVel) ui.marcar(b, false)
+            velTexto.text = "Velocidad"
             for ((_, b) in botonesTrans) ui.marcar(b, false)
             for ((_, b) in botonesMascara) ui.marcar(b, false)
             panelMascara.visibility = View.GONE
@@ -752,6 +802,11 @@ class TabletActivity : Activity() {
         if (!forzar && i == indiceAplicado) return
         val s = ed.segmentos.getOrNull(i) ?: return
         indiceAplicado = i
+        // El audio de Android llega hasta 8×: por encima, la vista previa va sin sonido para que el video corra a la velocidad real
+        val sinAudio = s.vel > 8f
+        val tsp = p.trackSelectionParameters
+        if (tsp.disabledTrackTypes.contains(C.TRACK_TYPE_AUDIO) != sinAudio)
+            p.trackSelectionParameters = tsp.buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, sinAudio).build()
         p.setPlaybackSpeed(s.vel)
         p.volume = s.vol.coerceAtMost(1f)
     }
@@ -1238,20 +1293,30 @@ class TabletActivity : Activity() {
     }
 
     /** Muestra la máscara del tramo que se está viendo. */
+    /** Textos con los valores de la máscara del tramo elegido. */
+    private fun textosMascara() {
+        val s = ed.segmentos.getOrNull(sel) ?: return
+        if (!::mAngTexto.isInitialized) return
+        mAngTexto.text = "Giro: ${s.mAng.toInt()}°" + if (s.mascara == "horizontal") "  ·  el tamaño no cambia la máscara Horizontal" else ""
+    }
+
     private fun dibujarMascara() {
         if (!::capaMascara.isInitialized) return
         val s = ed.segmentos.getOrNull(indiceActual())
         val w = capaMascara.width.takeIf { it > 0 } ?: marco.width
         val h = capaMascara.height.takeIf { it > 0 } ?: marco.height
+        // Guía amarilla: solo con el tramo elegido a la vista, en pausa y sin un texto o sticker elegido
+        val i = indiceActual()
+        guiaMascara.datos = if (s != null && s.mascara.isNotEmpty() && i == sel && selTexto == null && !selMusica && exo?.isPlaying != true) s else null
         if (s == null || s.mascara.isEmpty() || w <= 0 || h <= 0) {
             if (capaMascara.visibility != View.GONE) capaMascara.visibility = View.GONE
             claveMascara = ""
             return
         }
-        val clave = "${s.mascara}|${s.mTam}|${s.mSuave}|$w|$h"
+        val clave = "${s.mascara}|${s.mTam}|${s.mSuave}|${s.mX}|${s.mY}|${s.mAng}|$w|$h"
         if (clave != claveMascara) {
             if (cacheMascaras.size > 20) cacheMascaras.clear()
-            val bmp = cacheMascaras.getOrPut(clave) { Rotulo.mascara(s.mascara, s.mTam, s.mSuave, w / 2, h / 2) ?: Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888) }
+            val bmp = cacheMascaras.getOrPut(clave) { Rotulo.mascara(s.mascara, s.mTam, s.mSuave, w / 2, h / 2, s.mX, s.mY, s.mAng) ?: Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888) }
             capaMascara.setImageBitmap(bmp)
             claveMascara = clave
         }
@@ -1352,7 +1417,7 @@ class TabletActivity : Activity() {
 
     // ---------------------------------------------------------------- gestos sobre el video
 
-    private var gObjetivo = 0            // 0 nada · 1 texto o sticker · 2 video (zoom y encuadre del tramo) · 3 nodo de la caja
+    private var gObjetivo = 0            // 0 nada · 1 texto o sticker · 2 video (zoom y encuadre del tramo) · 3 nodo de la caja · 4 centro de la máscara
     private var gNodo: Manijas.Nodo? = null
     private var gCentroX = 0f
     private var gCentroY = 0f
@@ -1474,6 +1539,12 @@ class TabletActivity : Activity() {
                     }.coerceAtLeast(ui.dp(6).toFloat())
                     return@OnTouchListener true
                 }
+                // ¿Agarró el punto amarillo del centro de la máscara?
+                if (guiaMascara.datos != null && guiaMascara.tocaCentro(e.x, e.y)) {
+                    gObjetivo = 4; gId = null; gTocoCapa = true
+                    guardarHistoria()
+                    return@OnTouchListener true
+                }
                 val tocada = capaEnVista(e.x, e.y)
                 gTocoCapa = tocada != null
                 val t = tiempoActual()
@@ -1492,7 +1563,7 @@ class TabletActivity : Activity() {
                 true
             }
             MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_POINTER_UP -> {
-                if (gObjetivo == 3) return@OnTouchListener true
+                if (gObjetivo == 3 || gObjetivo == 4) return@OnTouchListener true
                 if (gObjetivo == 0 && e.actionMasked == MotionEvent.ACTION_POINTER_DOWN && selTexto == null && !selMusica && ed.segmentos.isNotEmpty()) {
                     // Pellizco sobre el video sin nada elegido: se elige el tramo que se está viendo
                     sel = indiceActual(); gObjetivo = 2; guardarHistoria(); refrescarPanel()
@@ -1503,6 +1574,13 @@ class TabletActivity : Activity() {
             MotionEvent.ACTION_MOVE -> {
                 if (gObjetivo == 0) return@OnTouchListener true
                 if (gObjetivo == 3) { moverNodo(e.x, e.y); return@OnTouchListener true }
+                if (gObjetivo == 4) {
+                    gMovio = true
+                    val nx = (e.x / w).coerceIn(0f, 1f); val ny = (e.y / h).coerceIn(0f, 1f)
+                    cambiarTramo(historia = false, reconstruirPlayer = false) { it.copy(mX = nx, mY = ny) }
+                    dibujarMascara()
+                    return@OnTouchListener true
+                }
                 val (cx, cy, d) = dedos(e)
                 val slop = ui.dp(6)
                 if (!gMovio && kotlin.math.abs(cx - gCx0) < slop && kotlin.math.abs(cy - gCy0) < slop && (gDist0 == 0f || kotlin.math.abs(d - gDist0) < slop)) return@OnTouchListener true

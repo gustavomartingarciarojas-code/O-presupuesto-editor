@@ -177,7 +177,7 @@ class LineaTiempo(ctx: Context, private val ui: Ui) : View(ctx) {
                 pBorde.strokeWidth = ui.dp(if (elegido) 3 else 1).toFloat()
                 c.drawRoundRect(rect, radio, radio, pBorde)
                 val etiqueta = o.nombreClip(s.clip).substringBeforeLast('.') +
-                    (if (s.vel != 1f) "  ${s.vel}×".replace(".0×", "×").replace('.', ',') else "")
+                    (if (s.vel != 1f) "  " + Segmento.textoVel(s.vel) else "")
                 textoEn(c, etiqueta, rect, Ui.tinta)
                 val ini = acc
                 if (s.kf.isNotEmpty()) s.kf.forEach { k -> diamante(c, xDe(ini + k.t), rect.bottom - lado - ui.dp(3), elegido) }

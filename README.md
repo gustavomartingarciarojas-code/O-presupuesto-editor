@@ -21,4 +21,8 @@ La APK se compila sola con GitHub Actions en cada cambio y queda en la versión 
 
 **Caja con 8 nodos:** el texto o sticker elegido muestra su caja con 4 esquinas (escalan parejo) y 4 nodos en el medio de cada lado (estiran solo el ancho o solo el alto). Se usan con el dedo o con el mouse, y también quedan en los keyframes. Con el mouse, la ruedita acerca o aleja la línea de tiempo.
 
+**Velocidad de 0,1× a 100×:** botones 0,1× · 1× · 2× · 5× · 10× · 100× y una barra para cualquier valor intermedio. Por encima de 8× la vista previa va sin sonido (límite del audio de Android); el video exportado lleva el audio acelerado.
+
+**Máscaras nuevas:** Horizontal (se ve de un lado de la línea) y Reflejo (franja entre dos líneas), además de círculo, óvalo y rectángulo. Todas se mueven (punto amarillo en el video o barras), giran de −180° a +180°, se cierran del todo con tamaño 0 y tienen borde difuminado.
+
 Próximas etapas: 3b filtros de audio en el editor · 3 keyframes y filtros de audio · 4 subtítulos, traducción y estabilización · 5 doblaje.
