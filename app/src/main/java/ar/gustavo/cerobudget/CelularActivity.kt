@@ -115,6 +115,7 @@ class CelularActivity : Activity(), Servidor.Rutas {
         expVer = ui.boton("Ver el video", false).apply { visibility = View.GONE }
         b2.addView(expVer, ui.lp(10))
         col.addView(b2, ui.lp(12))
+        Actualizar.agregar(this, ui, col)
 
         setContentView(scroll)
 

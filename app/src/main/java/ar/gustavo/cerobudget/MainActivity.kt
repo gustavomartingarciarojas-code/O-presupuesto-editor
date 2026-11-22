@@ -47,6 +47,8 @@ class MainActivity : Activity() {
         bAudio.setOnClickListener { startActivity(Intent(this, AudioActivity::class.java)) }
         botonActualizar.setOnClickListener { actualizar() }
 
+        if (intent?.action == Actualizador.ACCION) { procesar(intent); return }
+
         // Si ya se eligió antes, abre directo ese modo (una sola vez por arranque)
         if (savedInstanceState == null && intent?.action == Intent.ACTION_MAIN) {
             when (getSharedPreferences("inicio", MODE_PRIVATE).getString("modo", null)) {
@@ -92,7 +94,10 @@ class MainActivity : Activity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        if (intent.action != Actualizador.ACCION) return
+        if (intent.action == Actualizador.ACCION) procesar(intent)
+    }
+
+    private fun procesar(intent: Intent) {
         when (intent.getIntExtra(PackageInstaller.EXTRA_STATUS, -999)) {
             PackageInstaller.STATUS_PENDING_USER_ACTION -> {
                 val confirmar = intentDeConfirmacion(intent)

@@ -433,6 +433,7 @@ class TabletActivity : Activity() {
         expEstado = ui.texto("", 14f, Ui.gris).apply { setPadding(0, ui.dp(6), 0, 0) }
         b6.addView(expEstado, ui.lp())
         col.addView(b6, ui.lp(10))
+        Actualizar.agregar(this, ui, col)
 
         setContentView(raiz)
         raiz.isFocusableInTouchMode = true
