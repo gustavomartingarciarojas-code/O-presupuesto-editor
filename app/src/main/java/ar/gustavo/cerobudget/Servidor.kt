@@ -15,7 +15,11 @@ import java.net.URLDecoder
  */
 class Servidor(private val rutas: Rutas) {
 
-    companion object { const val PUERTO = 8766 }
+    companion object {
+        const val PUERTO = 8766
+        /** El servidor que está escuchando ahora (uno solo por app). */
+        @Volatile var actual: Servidor? = null
+    }
 
     class Respuesta(val codigo: Int, val tipo: String, val cuerpo: ByteArray? = null, val archivo: File? = null) {
         companion object {
@@ -35,10 +39,13 @@ class Servidor(private val rutas: Rutas) {
 
     fun iniciar() {
         if (activo) return
+        // Si quedó otra pantalla del celular abierta con el puerto tomado, se lo saca y se queda esta
+        actual?.takeIf { it !== this }?.detener()
         val s = ServerSocket()
         s.reuseAddress = true
         s.bind(InetSocketAddress(PUERTO))
         socket = s
+        actual = this
         Thread {
             while (!s.isClosed) {
                 val c = try { s.accept() } catch (_: Exception) { break }
@@ -50,6 +57,7 @@ class Servidor(private val rutas: Rutas) {
     fun detener() {
         try { socket?.close() } catch (_: Exception) { }
         socket = null
+        if (actual === this) actual = null
     }
 
     private fun atender(c: Socket) {

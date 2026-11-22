@@ -23,10 +23,12 @@
         <activity
             android:name=".CelularActivity"
             android:exported="false"
+            android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode|density" />
         <activity
             android:name=".TabletActivity"
             android:exported="false"
+            android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode|density" />
         <activity
