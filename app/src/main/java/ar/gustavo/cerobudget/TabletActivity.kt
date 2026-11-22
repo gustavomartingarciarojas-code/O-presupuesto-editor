@@ -199,6 +199,8 @@ class TabletActivity : Activity() {
         // ---------------- columna del editor
         val editor = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(ui.dp(14), ui.dp(12), ui.dp(if (horizontal) 6 else 14), ui.dp(8)) }
 
+        editor.addView(Actualizar.barra(this, ui), ui.lp().apply { bottomMargin = ui.dp(6) })
+
         val negro = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         marco = AspectRatioFrameLayout(this).apply { resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT }
         vista = PlayerView(this).apply {
@@ -513,7 +515,6 @@ class TabletActivity : Activity() {
         expEstado = ui.texto("", 14f, Ui.gris).apply { setPadding(0, ui.dp(6), 0, 0) }
         b6.addView(expEstado, ui.lp())
         col.addView(b6, ui.lp(10))
-        Actualizar.agregar(this, ui, col)
 
         setContentView(raiz)
         raiz.isFocusableInTouchMode = true
