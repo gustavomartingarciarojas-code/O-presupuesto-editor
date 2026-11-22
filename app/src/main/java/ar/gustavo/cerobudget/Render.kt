@@ -1,6 +1,7 @@
 package ar.gustavo.cerobudget
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.net.Uri
 import androidx.media3.common.C
 import androidx.media3.common.Effect
@@ -10,8 +11,13 @@ import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.ChannelMixingAudioProcessor
 import androidx.media3.common.audio.ChannelMixingMatrix
 import androidx.media3.common.audio.SpeedProvider
+import androidx.media3.effect.BitmapOverlay
 import androidx.media3.effect.FrameDropEffect
+import androidx.media3.effect.OverlayEffect
+import androidx.media3.effect.OverlaySettings
 import androidx.media3.effect.Presentation
+import androidx.media3.effect.RgbMatrix
+import androidx.media3.effect.TextureOverlay
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.DefaultEncoderFactory
 import androidx.media3.transformer.EditedMediaItem
@@ -28,6 +34,31 @@ object Render {
     private class VelocidadFija(private val v: Float) : SpeedProvider {
         override fun getSpeed(timeUs: Long): Float = v
         override fun getNextSpeedChangeTimeUs(timeUs: Long): Long = C.TIME_UNSET
+    }
+
+    /** Un texto encima del video, visible solo entre su inicio y su fin. */
+    private class RotuloOverlay(private val bmp: Bitmap, t: Texto) : BitmapOverlay() {
+        private val desde = t.ini * 1000
+        private val hasta = t.fin * 1000
+        private val ax = (t.x * 2f - 1f).coerceIn(-1f, 1f)
+        private val ay = (1f - t.y * 2f).coerceIn(-1f, 1f)
+        private val visible = OverlaySettings.Builder().setBackgroundFrameAnchor(ax, ay).build()
+        private val oculto = OverlaySettings.Builder().setBackgroundFrameAnchor(ax, ay).setAlphaScale(0f).build()
+        override fun getBitmap(presentationTimeUs: Long): Bitmap = bmp
+        override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings =
+            if (presentationTimeUs in desde..hasta) visible else oculto
+    }
+
+    /** Fundidos a negro o a blanco en los cortes que tienen transición. */
+    private class Fundidos(private val ed: Edicion) : RgbMatrix {
+        private val m = FloatArray(16)
+        override fun getMatrix(presentationTimeUs: Long, useHdr: Boolean): FloatArray {
+            val (f, color) = ed.fundido(presentationTimeUs / 1000)
+            java.util.Arrays.fill(m, 0f)
+            m[0] = f; m[5] = f; m[10] = f; m[15] = 1f
+            if (color == "blanco") { val o = 1f - f; m[12] = o; m[13] = o; m[14] = o }
+            return m
+        }
     }
 
     private fun volumen(v: Float): AudioProcessor = ChannelMixingAudioProcessor().apply {
@@ -100,9 +131,16 @@ object Render {
                 .build()
             secuencias += EditedMediaItemSequence.Builder(m).setIsLooping(true).build()
         }
+        // Efectos sobre todo el video ya armado: textos y fundidos (con los tiempos de la línea de tiempo)
+        val generales = mutableListOf<Effect>()
+        val rotulos = ed.textos.mapNotNull { t -> Rotulo.bitmap(ctx, t, w, h)?.let { RotuloOverlay(it, t) as TextureOverlay } }
+        if (rotulos.isNotEmpty()) generales += OverlayEffect(rotulos)
+        if (ed.segmentos.any { it.trans != "corte" }) generales += Fundidos(ed)
+
         val comp = Composition.Builder(secuencias)
             .setHdrMode(Composition.HDR_MODE_TONE_MAP_HDR_TO_SDR_USING_OPEN_GL)
             .experimentalSetForceAudioTrack(true)
+            .setEffects(Effects(emptyList(), generales))
             .build()
 
         val bitrate = if (primero.fps > 31f) 45_000_000 else 30_000_000

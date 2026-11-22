@@ -11,4 +11,6 @@ La APK se compila sola con GitHub Actions en cada cambio y queda en la versión 
 - **Tablet:** editor con línea de tiempo: cortar (borrar), dividir, duplicar, mover tramos, velocidad (0,5× a 3×), volumen (0 a 200 %), música de fondo con volumen, formato (original, 9:16, 16:9, 1:1, 4:5), deshacer y exportar.
 - Solo viaja la lista de edición (unos KB): los videos pesados no salen del celular.
 
-Próximas etapas: 2 texto, tipografías, stickers, transiciones, máscara · 3 keyframes y filtros de audio · 4 subtítulos, traducción y estabilización · 5 doblaje.
+**Versión 0.5 · Etapa 2a:** textos sobre el video (7 tipografías libres, tamaño, color, contorno o caja, posición arrastrando, cuándo aparece y cuándo se va) y transiciones entre tramos (fundido a negro y a blanco). Se ven en la tablet igual que en el video final.
+
+Próximas etapas: 2b stickers y máscara · 3 keyframes y filtros de audio · 4 subtítulos, traducción y estabilización · 5 doblaje.

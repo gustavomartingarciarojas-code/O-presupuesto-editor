@@ -1,6 +1,8 @@
 package ar.gustavo.cerobudget
 
 import android.app.Activity
+import android.app.AlertDialog
+import android.graphics.Bitmap
 import android.content.Intent
 import android.content.res.ColorStateList
 import android.content.res.Configuration
@@ -16,6 +18,8 @@ import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.MotionEvent
+import android.view.inputmethod.InputMethodManager
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -23,6 +27,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.SeekBar
@@ -59,6 +64,9 @@ class TabletActivity : Activity() {
     private var clipsCel: List<Clip> = emptyList()
     private val bajando = mutableMapOf<String, Int>()   // id → % bajado
     private var pxPorSegundo = 6f
+    private var selTexto: String? = null
+    private val cacheRotulos = mutableMapOf<String, Bitmap>()
+    private val vistasRotulos = mutableMapOf<String, ImageView>()
 
     // ------------------------------------------------------------------ conexión
     @Volatile private var conectado = false
@@ -76,6 +84,16 @@ class TabletActivity : Activity() {
     private lateinit var raiz: LinearLayout
     private lateinit var marco: AspectRatioFrameLayout
     private lateinit var vista: PlayerView
+    private lateinit var capaTextos: FrameLayout
+    private lateinit var velo: View
+    private val botonesTrans = mutableListOf<Pair<String, Button>>()
+    private lateinit var listaTextos: LinearLayout
+    private lateinit var panelTexto: LinearLayout
+    private val botonesFuente = mutableListOf<Pair<String, Button>>()
+    private val botonesColor = mutableListOf<Pair<String, Button>>()
+    private val botonesEstilo = mutableListOf<Pair<String, Button>>()
+    private lateinit var tamBarra: SeekBar
+    private lateinit var tamTexto: TextView
     private lateinit var aviso: TextView
     private lateinit var tiempo: TextView
     private lateinit var linea: SeekBar
@@ -147,6 +165,7 @@ class TabletActivity : Activity() {
 
     private fun armar() {
         botonesVel.clear(); botonesFormato.clear(); conTramo.clear()
+        botonesTrans.clear(); botonesFuente.clear(); botonesColor.clear(); botonesEstilo.clear(); vistasRotulos.clear()
         val horizontal = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         raiz = LinearLayout(this).apply { orientation = if (horizontal) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL; setBackgroundColor(Ui.fondo) }
 
@@ -163,6 +182,11 @@ class TabletActivity : Activity() {
             player = exo
         }
         marco.addView(vista, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        capaTextos = FrameLayout(this)
+        marco.addView(capaTextos, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        velo = View(this).apply { setBackgroundColor(Color.BLACK); alpha = 0f; isClickable = false }
+        marco.addView(velo, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        capaTextos.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, orr, ob -> if (r - l != orr - ol || b - t != ob - ot) manejador.post { dibujarTextos(true) } }
         negro.addView(marco, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER))
         aviso = ui.texto("", 15f, Ui.tinta).apply { gravity = Gravity.CENTER; setPadding(ui.dp(24), 0, ui.dp(24), 0) }
         negro.addView(aviso, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
@@ -206,7 +230,7 @@ class TabletActivity : Activity() {
         f2.addView(zMenos, LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)).apply { leftMargin = ui.dp(6) })
         f2.addView(zMas, LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)).apply { leftMargin = ui.dp(4) })
         editor.addView(f2, ui.lp(6))
-        editor.addView(ui.texto("Teclado: espacio play/pausa · ← → 5 s · S dividir · Supr borrar · D duplicar · Z deshacer", 12f, Ui.gris), ui.lp(2))
+        editor.addView(ui.texto("Teclado: espacio play/pausa · ← → 5 s · S dividir · Supr borrar · D duplicar · T texto · Z deshacer", 12f, Ui.gris), ui.lp(2))
 
         // ---------------- columna de herramientas
         val (scroll, col) = ui.columnaConScroll()
@@ -280,6 +304,16 @@ class TabletActivity : Activity() {
             override fun onStartTrackingTouch(s: SeekBar?) { guardarHistoria() }
             override fun onStopTrackingTouch(s: SeekBar?) { guardar(); raiz.requestFocus() }
         })
+        b3.addView(ui.texto("Transición al entrar en este tramo", 14f, Ui.tinta, true).apply { setPadding(0, ui.dp(10), 0, ui.dp(4)) }, ui.lp())
+        val ft = ui.fila()
+        for ((clave, t) in listOf("corte" to "Corte", "negro" to "Fundido negro", "blanco" to "Fundido blanco")) {
+            val b = ui.boton(t, false, 13f)
+            b.setOnClickListener { cambiarTramo(reconstruirPlayer = false) { it.copy(trans = clave) }; raiz.requestFocus() }
+            ft.addView(b, ui.peso(1f, 2))
+            botonesTrans += clave to b
+            conTramo += b
+        }
+        b3.addView(ft, ui.lp())
         val fm = ui.fila()
         val bIzq = ui.boton("◀ Mover", false, 14f); val bDer = ui.boton("Mover ▶", false, 14f)
         bIzq.setOnClickListener { moverTramo(-1); raiz.requestFocus() }
@@ -289,8 +323,10 @@ class TabletActivity : Activity() {
         b3.addView(fm, ui.lp(8))
         col.addView(b3, ui.lp(10))
 
+        col.addView(armarBloqueTextos(), ui.lp(10))
+
         // 4 Música
-        val b4 = ui.bloque("4  Música")
+        val b4 = ui.bloque("5  Música")
         musNombre = ui.texto("", 14f, Ui.gris)
         b4.addView(musNombre, ui.lp())
         val fmu = ui.fila()
@@ -326,7 +362,7 @@ class TabletActivity : Activity() {
         col.addView(b4, ui.lp(10))
 
         // 5 Formato
-        val b5 = ui.bloque("5  Formato")
+        val b5 = ui.bloque("6  Formato")
         val ff = ui.fila()
         for ((clave, t) in listOf("original" to "Original", "9:16" to "9:16", "16:9" to "16:9", "1:1" to "1:1", "4:5" to "4:5")) {
             val b = ui.boton(t, false, 14f)
@@ -342,7 +378,7 @@ class TabletActivity : Activity() {
         col.addView(b5, ui.lp(10))
 
         // 6 Exportar
-        val b6 = ui.bloque("6  Exportar")
+        val b6 = ui.bloque("7  Exportar")
         b6.addView(ui.texto("El celular arma el video final en 4K con los originales y lo guarda en Movies/0-Presupuesto-Editor.", 13f, Ui.gris).apply { setPadding(0, 0, 0, ui.dp(8)) }, ui.lp())
         bExportar = ui.boton("Exportar en 4K", true)
         bExportar.setOnClickListener { raiz.requestFocus(); exportar() }
@@ -386,13 +422,16 @@ class TabletActivity : Activity() {
             tramoInfo.text = "Tramo ${sel + 1} de ${ed.segmentos.size} · ${nombreClip(s.clip)}\n" +
                 "Del ${Datos.reloj(s.ini)} al ${Datos.reloj(s.fin)} del original · dura ${Datos.reloj(s.dura)}"
             for ((v, b) in botonesVel) ui.marcar(b, v == s.vel)
+            for ((k, b) in botonesTrans) ui.marcar(b, k == s.trans)
             volBarra.progress = (s.vol * 100).toInt()
             volTexto.text = "Volumen: ${(s.vol * 100).toInt()} %"
         } else {
             tramoInfo.setTextColor(Ui.gris)
             tramoInfo.text = if (ed.segmentos.isEmpty()) "La línea de tiempo está vacía: agregá un video desde la lista." else "Tocá un tramo de la línea de tiempo."
             for ((_, b) in botonesVel) ui.marcar(b, false)
+            for ((_, b) in botonesTrans) ui.marcar(b, false)
         }
+        refrescarTextos()
 
         if (ed.musica.isEmpty()) {
             musNombre.setTextColor(Ui.gris); musNombre.text = "Sin música."
@@ -707,8 +746,12 @@ class TabletActivity : Activity() {
                 actualizarTiempo()
                 val i = indiceActual()
                 if (i != ultimoIndiceTira) { ultimoIndiceTira = i; dibujarTira() }
+                dibujarTextos(false)
+                val (f, color) = ed.fundido(tiempoActual())
+                velo.setBackgroundColor(if (color == "blanco") Color.WHITE else Color.BLACK)
+                velo.alpha = 1f - f
             }
-            manejador.postDelayed(this, 150)
+            manejador.postDelayed(this, 50)
         }
     }
 
@@ -724,10 +767,237 @@ class TabletActivity : Activity() {
                 KeyEvent.KEYCODE_FORWARD_DEL, KeyEvent.KEYCODE_DEL -> { borrar(); return true }
                 KeyEvent.KEYCODE_D -> { duplicar(); return true }
                 KeyEvent.KEYCODE_Z -> { deshacer(); return true }
+                KeyEvent.KEYCODE_T -> { agregarTexto(); return true }
                 KeyEvent.KEYCODE_MOVE_HOME -> { irA(0); return true }
             }
         }
         return super.dispatchKeyEvent(event)
+    }
+
+    // ================================================================== textos
+
+    private fun armarBloqueTextos(): LinearLayout {
+        val b = ui.bloque("4  Textos")
+        val bAgregar = ui.boton("Agregar texto", true, 15f)
+        bAgregar.setOnClickListener { agregarTexto() }
+        b.addView(bAgregar, ui.lp())
+        b.addView(ui.texto("Aparece donde está el cursor y dura 3 segundos. Arrastralo sobre el video para moverlo.", 13f, Ui.gris).apply { setPadding(0, ui.dp(6), 0, 0) }, ui.lp())
+        listaTextos = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        b.addView(listaTextos, ui.lp(6))
+
+        panelTexto = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val fe = ui.fila()
+        val bEditar = ui.boton("Cambiar texto", false, 14f); val bBorrar = ui.boton("Borrar texto", false, 14f)
+        bEditar.setOnClickListener { editarTexto() }
+        bBorrar.setOnClickListener { borrarTexto() }
+        fe.addView(bEditar, ui.peso(1f, 2)); fe.addView(bBorrar, ui.peso(1f, 2))
+        panelTexto.addView(fe, ui.lp(6))
+
+        panelTexto.addView(ui.texto("Cuándo se ve", 14f, Ui.tinta, true).apply { setPadding(0, ui.dp(10), 0, ui.dp(4)) }, ui.lp())
+        val fti = ui.fila()
+        val bDesde = ui.boton("Empieza en el cursor", false, 13f); val bHasta = ui.boton("Termina en el cursor", false, 13f)
+        bDesde.setOnClickListener { cambiarTexto { t -> val ini = tiempoActual(); t.copy(ini = ini, fin = if (t.fin <= ini + 200) ini + 3000 else t.fin) } }
+        bHasta.setOnClickListener { cambiarTexto { t -> val fin = tiempoActual(); if (fin <= t.ini + 200) t else t.copy(fin = fin) } }
+        fti.addView(bDesde, ui.peso(1f, 2)); fti.addView(bHasta, ui.peso(1f, 2))
+        panelTexto.addView(fti, ui.lp())
+
+        panelTexto.addView(ui.texto("Tipografía", 14f, Ui.tinta, true).apply { setPadding(0, ui.dp(10), 0, ui.dp(4)) }, ui.lp())
+        Rotulo.FUENTES.chunked(4).forEach { grupo ->
+            val f = ui.fila()
+            grupo.forEach { (clave, nombre) ->
+                val bt = ui.boton(nombre, false, 13f).apply { typeface = Rotulo.fuente(this@TabletActivity, clave) }
+                bt.setOnClickListener { cambiarTexto { it.copy(fuente = clave) } }
+                f.addView(bt, ui.peso(1f, 2))
+                botonesFuente += clave to bt
+            }
+            panelTexto.addView(f, ui.lp(4))
+        }
+
+        tamTexto = ui.texto("Tamaño", 14f, Ui.tinta, true).apply { setPadding(0, ui.dp(10), 0, 0) }
+        panelTexto.addView(tamTexto, ui.lp())
+        tamBarra = SeekBar(this).apply {
+            max = 180
+            progressTintList = ColorStateList.valueOf(Ui.amarillo); thumbTintList = ColorStateList.valueOf(Ui.amarillo)
+            isFocusable = false
+        }
+        panelTexto.addView(tamBarra, ui.lp(2).apply { height = ui.dp(40) })
+        tamBarra.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar?, p: Int, delUsuario: Boolean) {
+                if (!delUsuario) return
+                val tam = (20 + p) / 1000f
+                tamTexto.text = "Tamaño: ${(tam * 1000).toInt() / 10f} % del alto".replace('.', ',')
+                cambiarTexto(historia = false) { it.copy(tam = tam) }
+            }
+            override fun onStartTrackingTouch(s: SeekBar?) { guardarHistoria() }
+            override fun onStopTrackingTouch(s: SeekBar?) { guardar(); raiz.requestFocus() }
+        })
+
+        panelTexto.addView(ui.texto("Color", 14f, Ui.tinta, true).apply { setPadding(0, ui.dp(10), 0, ui.dp(4)) }, ui.lp())
+        val fc = ui.fila()
+        Rotulo.COLORES.forEach { hex ->
+            val bc = Button(this).apply {
+                isFocusable = false
+                minHeight = ui.dp(40); minimumHeight = ui.dp(40); minWidth = 0; minimumWidth = 0
+                setOnClickListener { cambiarTexto { it.copy(color = hex) } }
+            }
+            fc.addView(bc, LinearLayout.LayoutParams(0, ui.dp(40), 1f).apply { leftMargin = ui.dp(3); rightMargin = ui.dp(3) })
+            botonesColor += hex to bc
+        }
+        panelTexto.addView(fc, ui.lp())
+
+        panelTexto.addView(ui.texto("Estilo y lugar", 14f, Ui.tinta, true).apply { setPadding(0, ui.dp(10), 0, ui.dp(4)) }, ui.lp())
+        val fs = ui.fila()
+        for ((clave, nombre) in listOf("contorno" to "Contorno", "caja" to "Caja", "simple" to "Simple")) {
+            val bs = ui.boton(nombre, false, 13f)
+            bs.setOnClickListener { cambiarTexto { it.copy(estilo = clave) } }
+            fs.addView(bs, ui.peso(1f, 2))
+            botonesEstilo += clave to bs
+        }
+        panelTexto.addView(fs, ui.lp())
+        val fp = ui.fila()
+        for ((nombre, y) in listOf("Arriba" to 0.12f, "Centro" to 0.5f, "Abajo" to 0.85f)) {
+            val bp = ui.boton(nombre, false, 13f)
+            bp.setOnClickListener { cambiarTexto { it.copy(x = 0.5f, y = y) } }
+            fp.addView(bp, ui.peso(1f, 2))
+        }
+        panelTexto.addView(fp, ui.lp(4))
+        b.addView(panelTexto, ui.lp())
+        return b
+    }
+
+    private fun refrescarTextos() {
+        listaTextos.removeAllViews()
+        if (ed.textos.none { it.id == selTexto }) selTexto = null
+        ed.textos.sortedBy { it.ini }.forEach { t ->
+            val elegido = t.id == selTexto
+            val fila = ui.texto("${Datos.reloj(t.ini)} → ${Datos.reloj(t.fin)}   ${t.texto.replace('\n', ' ')}", 14f, if (elegido) Ui.fondo else Ui.tinta).apply {
+                maxLines = 1; ellipsize = TextUtils.TruncateAt.END
+                setPadding(ui.dp(10), ui.dp(8), ui.dp(10), ui.dp(8))
+                background = GradientDrawable().apply { cornerRadius = ui.dp(8).toFloat(); setColor(if (elegido) Ui.amarillo else Ui.fondo); setStroke(ui.dp(1), Ui.linea) }
+                setOnClickListener { selTexto = t.id; irA(t.ini); refrescarTextos(); raiz.requestFocus() }
+            }
+            listaTextos.addView(fila, ui.lp(4))
+        }
+        val t = ed.textos.firstOrNull { it.id == selTexto }
+        panelTexto.visibility = if (t == null) View.GONE else View.VISIBLE
+        if (t != null) {
+            for ((k, b) in botonesFuente) ui.marcar(b, k == t.fuente)
+            for ((k, b) in botonesEstilo) ui.marcar(b, k == t.estilo)
+            for ((hex, b) in botonesColor) b.background = GradientDrawable().apply {
+                cornerRadius = ui.dp(8).toFloat()
+                setColor(Color.parseColor(hex))
+                setStroke(ui.dp(if (hex == t.color) 4 else 1), if (hex == t.color) Ui.amarillo else Ui.linea)
+            }
+            tamBarra.progress = ((t.tam * 1000).toInt() - 20).coerceIn(0, 180)
+            tamTexto.text = "Tamaño: ${(t.tam * 1000).toInt() / 10f} % del alto".replace('.', ',')
+        }
+        dibujarTextos(true)
+    }
+
+    private fun pedirTexto(inicial: String, listo: (String) -> Unit) {
+        val campo = EditText(this).apply {
+            setText(inicial); setSelection(inicial.length)
+            setTextColor(Ui.tinta); setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            minLines = 2
+            setPadding(ui.dp(20), ui.dp(12), ui.dp(20), ui.dp(12))
+        }
+        val d = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Texto")
+            .setView(campo)
+            .setPositiveButton("Listo") { _, _ -> val v = campo.text.toString().trim(); if (v.isNotEmpty()) listo(v); raiz.requestFocus() }
+            .setNegativeButton("Cancelar") { _, _ -> raiz.requestFocus() }
+            .create()
+        d.setOnShowListener {
+            campo.requestFocus()
+            getSystemService(InputMethodManager::class.java)?.showSoftInput(campo, InputMethodManager.SHOW_IMPLICIT)
+        }
+        d.show()
+    }
+
+    private fun agregarTexto() {
+        if (ed.segmentos.isEmpty()) { avisar("Primero agregá un video."); return }
+        exo?.pause()
+        pedirTexto("") { v ->
+            val ini = tiempoActual()
+            val t = Texto("t" + System.currentTimeMillis().toString(36), v, ini, (ini + 3000).coerceAtMost(ed.total.coerceAtLeast(ini + 500)))
+            selTexto = t.id
+            cambiar(ed.copy(textos = ed.textos + t), reconstruirPlayer = false)
+        }
+    }
+
+    private fun editarTexto() {
+        val t = ed.textos.firstOrNull { it.id == selTexto } ?: return
+        pedirTexto(t.texto) { v -> cambiarTexto { it.copy(texto = v) } }
+    }
+
+    private fun borrarTexto() {
+        val id = selTexto ?: return
+        selTexto = null
+        cambiar(ed.copy(textos = ed.textos.filter { it.id != id }), reconstruirPlayer = false)
+        raiz.requestFocus()
+    }
+
+    private fun cambiarTexto(historia: Boolean = true, f: (Texto) -> Texto) {
+        val id = selTexto ?: return
+        val nuevos = ed.textos.map { if (it.id == id) f(it) else it }
+        if (historia) cambiar(ed.copy(textos = nuevos), reconstruirPlayer = false)
+        else { ed = ed.copy(textos = nuevos); dibujarTextos(true) }
+        raiz.requestFocus()
+    }
+
+    /** Muestra sobre la vista previa los textos que corresponden al momento actual. */
+    private fun dibujarTextos(rehacer: Boolean) {
+        if (!::capaTextos.isInitialized) return
+        val w = capaTextos.width; val h = capaTextos.height
+        if (w <= 0 || h <= 0) return
+        val t = tiempoActual()
+        val ids = ed.textos.map { it.id }.toSet()
+        vistasRotulos.keys.filter { it !in ids }.forEach { capaTextos.removeView(vistasRotulos.remove(it)) }
+        if (rehacer && cacheRotulos.size > 60) cacheRotulos.clear()
+        for (tx in ed.textos) {
+            val visible = t in tx.ini..tx.fin || tx.id == selTexto && exo?.isPlaying != true && t in (tx.ini - 1)..(tx.fin + 1)
+            var iv = vistasRotulos[tx.id]
+            if (iv == null) {
+                iv = ImageView(this)
+                iv.setOnTouchListener(arrastre(tx.id))
+                capaTextos.addView(iv, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+                vistasRotulos[tx.id] = iv
+            }
+            if (!visible) { iv.visibility = View.GONE; continue }
+            val clave = tx.json().toString() + "|$w|$h"
+            val bmp = cacheRotulos.getOrPut(clave) { Rotulo.bitmap(this, tx, w, h) ?: Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888) }
+            if (iv.tag != clave) { iv.setImageBitmap(bmp); iv.tag = clave }
+            iv.translationX = tx.x * w - bmp.width / 2f
+            iv.translationY = tx.y * h - bmp.height / 2f
+            iv.visibility = View.VISIBLE
+            iv.alpha = if (tx.id == selTexto) 1f else 0.97f
+            iv.background = if (tx.id == selTexto && exo?.isPlaying != true) GradientDrawable().apply { setStroke(ui.dp(2), Ui.amarillo) } else null
+        }
+    }
+
+    /** Arrastrar un texto con el dedo o el mouse para cambiarlo de lugar. */
+    private fun arrastre(id: String) = View.OnTouchListener { v, e ->
+        val w = capaTextos.width.toFloat(); val h = capaTextos.height.toFloat()
+        if (w <= 0 || h <= 0) return@OnTouchListener false
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                if (selTexto != id) { selTexto = id; refrescarTextos() }
+                guardarHistoria()
+                exo?.pause()
+                v.parent?.requestDisallowInterceptTouchEvent(true)
+                true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val cx = (v.translationX + e.x) / w
+                val cy = (v.translationY + e.y) / h
+                ed = ed.copy(textos = ed.textos.map { if (it.id == id) it.copy(x = cx.coerceIn(0.02f, 0.98f), y = cy.coerceIn(0.02f, 0.98f)) else it })
+                dibujarTextos(false)
+                true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { guardar(); refrescarTextos(); raiz.requestFocus(); true }
+            else -> false
+        }
     }
 
     // ================================================================== música
