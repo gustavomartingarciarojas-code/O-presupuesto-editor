@@ -27,7 +27,6 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.GridLayout
-import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
@@ -64,8 +63,10 @@ class TabletActivity : Activity() {
     private var sel = -1
     private var clipsCel: List<Clip> = emptyList()
     private val bajando = mutableMapOf<String, Int>()   // id → % bajado
-    private var pxPorSegundo = 6f
+    private var pxPorMs = 0.03f
     private var selTexto: String? = null
+    private var selMusica = false
+    private var arrastreCapa = false
     private val cacheRotulos = mutableMapOf<String, Bitmap>()
     private val vistasRotulos = mutableMapOf<String, ImageView>()
 
@@ -88,7 +89,6 @@ class TabletActivity : Activity() {
     private lateinit var capaTextos: FrameLayout
     private lateinit var velo: View
     private val botonesTrans = mutableListOf<Pair<String, Button>>()
-    private lateinit var listaTextos: LinearLayout
     private lateinit var panelTexto: LinearLayout
     private val botonesFuente = mutableListOf<Pair<String, Button>>()
     private val botonesColor = mutableListOf<Pair<String, Button>>()
@@ -113,10 +113,9 @@ class TabletActivity : Activity() {
     private val cacheMascaras = mutableMapOf<String, Bitmap>()
     private lateinit var aviso: TextView
     private lateinit var tiempo: TextView
-    private lateinit var linea: SeekBar
-    private lateinit var tira: LinearLayout
-    private lateinit var tiraScroll: HorizontalScrollView
+    private lateinit var lineaT: LineaTiempo
     private lateinit var bPlay: Button
+    private lateinit var bKey: Button
     private lateinit var ipCampo: EditText
     private lateinit var conEstado: TextView
     private lateinit var listaClips: LinearLayout
@@ -219,11 +218,9 @@ class TabletActivity : Activity() {
 
         tiempo = ui.texto("00:00,0 / 00:00,0", 16f, Ui.tinta, true).apply { setPadding(0, ui.dp(6), 0, 0) }
         editor.addView(tiempo, ui.lp())
-        linea = SeekBar(this).apply {
-            progressTintList = ColorStateList.valueOf(Ui.amarillo); thumbTintList = ColorStateList.valueOf(Ui.amarillo)
-            isFocusable = false
-        }
-        editor.addView(linea, ui.lp(2).apply { height = ui.dp(36) })
+        if (::lineaT.isInitialized) pxPorMs = lineaT.pxPorMs
+        lineaT = LineaTiempo(this, ui).apply { oyente = oyenteLinea; pxPorMs = this@TabletActivity.pxPorMs; isFocusable = false }
+        editor.addView(lineaT, ui.lp(4))
 
         val f1 = ui.fila()
         fun ctrl(fila: LinearLayout, t: String, principal: Boolean, w: Float = 1f, accion: () -> Unit): Button {
@@ -239,20 +236,9 @@ class TabletActivity : Activity() {
         ctrl(f1, "Borrar", false) { borrar() }
         ctrl(f1, "Duplicar", false) { duplicar() }
         ctrl(f1, "Deshacer", false) { deshacer() }
-        editor.addView(f1, ui.lp(4))
-
-        val f2 = ui.fila().apply { gravity = Gravity.CENTER_VERTICAL }
-        tiraScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = true; isFocusable = false }
-        tira = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, ui.dp(4), 0, ui.dp(4)) }
-        tiraScroll.addView(tira)
-        f2.addView(tiraScroll, LinearLayout.LayoutParams(0, ui.dp(72), 1f))
-        val zMenos = ui.boton("−", false, 18f); val zMas = ui.boton("+", false, 18f)
-        zMenos.setOnClickListener { pxPorSegundo = (pxPorSegundo / 1.5f).coerceAtLeast(0.5f); dibujarTira() }
-        zMas.setOnClickListener { pxPorSegundo = (pxPorSegundo * 1.5f).coerceAtMost(120f); dibujarTira() }
-        f2.addView(zMenos, LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)).apply { leftMargin = ui.dp(6) })
-        f2.addView(zMas, LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)).apply { leftMargin = ui.dp(4) })
-        editor.addView(f2, ui.lp(6))
-        editor.addView(ui.texto("Teclado: espacio play/pausa · ← → 5 s · S dividir · Supr borrar · D duplicar · T texto · Z deshacer", 12f, Ui.gris), ui.lp(2))
+        bKey = ctrl(f1, "◆ Agregar", true, 1.4f) { tocarKey() }
+        editor.addView(f1, ui.lp(6))
+        editor.addView(ui.texto("Línea: arrastrá a los costados para mover el cabezal · pellizcá para acercar o alejar · tocá un tramo, texto o sticker para elegirlo · manijas blancas = inicio y fin · mantené apretado el sticker para moverlo en el tiempo.\nTeclado: espacio play/pausa · ← → 5 s · K keyframe · S dividir · Supr borrar · D duplicar · T texto · Z deshacer", 12f, Ui.gris), ui.lp(2))
 
         // ---------------- columna de herramientas
         val (scroll, col) = ui.columnaConScroll()
@@ -391,14 +377,10 @@ class TabletActivity : Activity() {
         zoomBarra = barraTramo(null, 200) { k, p -> val z = 1f + p / 100f; val lim = Interp.limite(z); k.copy(zoom = z, px = k.px.coerceIn(-lim, lim), py = k.py.coerceIn(-lim, lim)) }
         horBarra = barraTramo("Encuadre horizontal (izquierda ↔ derecha)", 100) { k, p -> k.copy(px = (p - 50) / 50f * Interp.limite(k.zoom)) }
         verBarra = barraTramo("Encuadre vertical (arriba ↔ abajo)", 100) { k, p -> k.copy(py = (p - 50) / 50f * Interp.limite(k.zoom)) }
-        val fk = ui.fila()
-        val bKf = ui.boton("◆ Keyframe", true, 13f); val bKfBorrar = ui.boton("Borrar ◆", false, 13f); val bKfTodos = ui.boton("Quitar todos", false, 13f)
-        bKf.setOnClickListener { agregarKfTramo(); raiz.requestFocus() }
-        bKfBorrar.setOnClickListener { borrarKfTramo(); raiz.requestFocus() }
-        bKfTodos.setOnClickListener { cambiarTramo(reconstruirPlayer = false) { it.copy(kf = emptyList()) }; raiz.requestFocus() }
-        fk.addView(bKf, ui.peso(1.2f, 2)); fk.addView(bKfBorrar, ui.peso(1f, 2)); fk.addView(bKfTodos, ui.peso(1.1f, 2))
-        conTramo += bKf; conTramo += bKfBorrar; conTramo += bKfTodos
-        b3.addView(fk, ui.lp(6))
+        val bKfTodos = ui.boton("Quitar todos los ◆ del tramo", false, 13f)
+        bKfTodos.setOnClickListener { cambiarTramo(reconstruirPlayer = false) { s -> val k = s.encuadre(relEnTramo()); s.copy(kf = emptyList(), zoom = k.zoom, px = k.px, py = k.py, vol = k.vol) }; raiz.requestFocus() }
+        conTramo += bKfTodos
+        b3.addView(bKfTodos, ui.lp(6))
         kfInfo = ui.texto("", 13f, Ui.gris).apply { setPadding(0, ui.dp(4), 0, 0) }
         b3.addView(kfInfo, ui.lp())
         val fm = ui.fila()
@@ -428,15 +410,8 @@ class TabletActivity : Activity() {
             isFocusable = false
         }
         b4.addView(musBarra, ui.lp(2).apply { height = ui.dp(40) })
-        val fkm = ui.fila()
-        val bKm = ui.boton("◆ Keyframe", true, 13f); val bKmB = ui.boton("Borrar ◆", false, 13f); val bKmT = ui.boton("Quitar todos", false, 13f)
-        bKm.setOnClickListener {
-            if (ed.musica.isNotEmpty()) { val t = tiempoActual(); cambiar(ed.copy(kfMusica = (ed.kfMusica.filter { kotlin.math.abs(it.t - t) > 150 } + KfM(t, ed.volMusicaEn(t))).sortedBy { it.t }), reconstruirPlayer = false) }
-            raiz.requestFocus()
-        }
-        bKmB.setOnClickListener { val t = tiempoActual(); cambiar(ed.copy(kfMusica = ed.kfMusica.filter { kotlin.math.abs(it.t - t) > 300 }), reconstruirPlayer = false); raiz.requestFocus() }
-        bKmT.setOnClickListener { cambiar(ed.copy(kfMusica = emptyList()), reconstruirPlayer = false); raiz.requestFocus() }
-        fkm.addView(bKm, ui.peso(1.2f, 2)); fkm.addView(bKmB, ui.peso(1f, 2)); fkm.addView(bKmT, ui.peso(1.1f, 2))
+        val fkm = ui.boton("Quitar todos los ◆ de la música", false, 13f)
+        fkm.setOnClickListener { val v = ed.volMusicaEn(tiempoActual()); cambiar(ed.copy(kfMusica = emptyList(), volMusica = v), reconstruirPlayer = false); raiz.requestFocus() }
         b4.addView(fkm, ui.lp(4))
         kfMusicaInfo = ui.texto("", 13f, Ui.gris).apply { setPadding(0, ui.dp(4), 0, 0) }
         b4.addView(kfMusicaInfo, ui.lp())
@@ -498,16 +473,7 @@ class TabletActivity : Activity() {
         raiz.isFocusableInTouchMode = true
         raiz.requestFocus()
 
-        linea.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(s: SeekBar?, p: Int, delUsuario: Boolean) { if (delUsuario) irA(p.toLong()) }
-            override fun onStartTrackingTouch(s: SeekBar?) { arrastrando = true; exo?.setSeekParameters(SeekParameters.CLOSEST_SYNC) }
-            override fun onStopTrackingTouch(s: SeekBar?) {
-                arrastrando = false
-                exo?.setSeekParameters(SeekParameters.EXACT)
-                irA(linea.progress.toLong())
-                raiz.requestFocus()
-            }
-        })
+        capaTextos.setOnTouchListener(gestoVista)
 
         refrescarPanel()
         refrescarClips()
@@ -555,44 +521,15 @@ class TabletActivity : Activity() {
             val vm = ed.volMusicaEn(tiempoActual())
             musBarra.progress = (vm * 100).toInt()
             musTexto.text = "Volumen de la música: ${(vm * 100).toInt()} %"
-            kfMusicaInfo.text = if (ed.kfMusica.isEmpty()) "Sin keyframes: el volumen es fijo." else "Keyframes: " + ed.kfMusica.joinToString(" · ") { Datos.reloj(it.t) }
+            kfMusicaInfo.text = if (ed.kfMusica.isEmpty()) "Sin keyframes: el volumen es fijo. Para animarlo: tocá la pista verde de la música en la línea, poné el cabezal y tocá ◆ Agregar." else "Keyframes: " + ed.kfMusica.joinToString(" · ") { Datos.reloj(it.t) }
         }
         ui.activo(bExportar, ed.segmentos.isNotEmpty() && !exportando)
-        linea.max = ed.total.toInt().coerceAtLeast(1)
         dibujarTira()
+        actualizarBotonKey(true)
     }
 
     private fun dibujarTira() {
-        tira.removeAllViews()
-        val actual = indiceActual()
-        ed.segmentos.forEachIndexed { i, s ->
-            val w = (s.dura / 1000f * pxPorSegundo).toInt().coerceAtLeast(ui.dp(64))
-            val elegido = i == sel
-            val t = TextView(this).apply {
-                text = nombreClip(s.clip).substringBeforeLast('.') + "\n" + Datos.reloj(s.dura) +
-                    (if (s.vel != 1f) " · ${s.vel}×".replace(".0×", "×").replace('.', ',') else "") +
-                    (if (s.vol != 1f) " · ${(s.vol * 100).toInt()} %" else "") +
-                    (if (s.kf.isNotEmpty()) " · ◆${s.kf.size}" else "")
-                setTextColor(if (elegido) Ui.fondo else Ui.tinta)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-                maxLines = 2; ellipsize = TextUtils.TruncateAt.END
-                setPadding(ui.dp(8), ui.dp(4), ui.dp(8), ui.dp(4))
-                gravity = Gravity.CENTER_VERTICAL
-                background = GradientDrawable().apply {
-                    cornerRadius = ui.dp(8).toFloat()
-                    setColor(if (elegido) Ui.amarillo else Ui.azul)
-                    setStroke(ui.dp(if (i == actual) 3 else 1), if (i == actual) Ui.tinta else Ui.linea)
-                }
-                setOnClickListener {
-                    sel = i
-                    irA(ed.inicio(i))
-                    refrescarPanel()
-                    raiz.requestFocus()
-                }
-            }
-            tira.addView(t, LinearLayout.LayoutParams(w, ViewGroup.LayoutParams.MATCH_PARENT).apply { rightMargin = ui.dp(3) })
-        }
-        if (ed.segmentos.isEmpty()) tira.addView(ui.texto("Línea de tiempo vacía", 14f, Ui.gris).apply { gravity = Gravity.CENTER_VERTICAL })
+        if (::lineaT.isInitialized) lineaT.refrescar()
     }
 
     private fun refrescarClips() {
@@ -679,6 +616,7 @@ class TabletActivity : Activity() {
     }
 
     private fun borrar() {
+        if (selTexto != null) { borrarTexto(); return }
         if (ed.segmentos.isEmpty()) return
         val i = if (sel in ed.segmentos.indices) sel else ed.ubicar(tiempoActual()).first
         val inicio = ed.inicio(i)
@@ -850,7 +788,6 @@ class TabletActivity : Activity() {
         val total = ed.total
         val t = tiempoActual()
         tiempo.text = "${Datos.reloj(t)} / ${Datos.reloj(total)}"
-        if (!arrastrando) linea.progress = t.toInt()
     }
 
     private var ultimoIndiceTira = -2
@@ -862,6 +799,8 @@ class TabletActivity : Activity() {
                 actualizarTiempo()
                 val i = indiceActual()
                 if (i != ultimoIndiceTira) { ultimoIndiceTira = i; dibujarTira() }
+                lineaT.invalidate()
+                actualizarBotonKey(false)
                 dibujarTextos(false)
                 dibujarMascara()
                 aplicarEncuadre()
@@ -886,6 +825,7 @@ class TabletActivity : Activity() {
                 KeyEvent.KEYCODE_D -> { duplicar(); return true }
                 KeyEvent.KEYCODE_Z -> { deshacer(); return true }
                 KeyEvent.KEYCODE_T -> { agregarTexto(); return true }
+                KeyEvent.KEYCODE_K -> { tocarKey(); return true }
                 KeyEvent.KEYCODE_MOVE_HOME -> { irA(0); return true }
             }
         }
@@ -909,9 +849,7 @@ class TabletActivity : Activity() {
         }
         fa.addView(bAgregar, ui.peso(1f, 2)); fa.addView(bSticker, ui.peso(1f, 2)); fa.addView(bImagen, ui.peso(1f, 2))
         b.addView(fa, ui.lp())
-        b.addView(ui.texto("Aparece donde está el cursor y dura 3 segundos. Arrastralo sobre el video para moverlo. La imagen puede ser un PNG con fondo transparente (por ejemplo, un logo).", 13f, Ui.gris).apply { setPadding(0, ui.dp(6), 0, 0) }, ui.lp())
-        listaTextos = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        b.addView(listaTextos, ui.lp(6))
+        b.addView(ui.texto("Aparece donde está el cabezal y dura 3 segundos, en su propia pista de la línea de tiempo. Sobre el video: arrastralo con un dedo para moverlo y pellizcalo con dos para agrandarlo o achicarlo. La imagen puede ser un PNG con fondo transparente (por ejemplo, un logo).", 13f, Ui.gris).apply { setPadding(0, ui.dp(6), 0, 0) }, ui.lp())
 
         panelTexto = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val fe = ui.fila()
@@ -997,13 +935,9 @@ class TabletActivity : Activity() {
         }
         panelTexto.addView(fp, ui.lp(4))
         panelTexto.addView(ui.texto("Animación", 14f, Ui.tinta, true).apply { setPadding(0, ui.dp(10), 0, ui.dp(4)) }, ui.lp())
-        val fkt = ui.fila()
-        val bKt = ui.boton("◆ Keyframe", true, 13f); val bKtB = ui.boton("Borrar ◆", false, 13f); val bKtT = ui.boton("Quitar todos", false, 13f)
-        bKt.setOnClickListener { agregarKfTexto() }
-        bKtB.setOnClickListener { val t = tiempoActual(); cambiarTexto { tx -> tx.copy(kf = tx.kf.filter { kotlin.math.abs(it.t - t) > 300 }) } }
-        bKtT.setOnClickListener { cambiarTexto { tx -> val k = tx.pos(tiempoActual()); tx.copy(kf = emptyList(), x = k.x, y = k.y) } }
-        fkt.addView(bKt, ui.peso(1.2f, 2)); fkt.addView(bKtB, ui.peso(1f, 2)); fkt.addView(bKtT, ui.peso(1.1f, 2))
-        panelTexto.addView(fkt, ui.lp())
+        val bKtT = ui.boton("Quitar todos los ◆", false, 13f)
+        bKtT.setOnClickListener { cambiarTexto { tx -> val k = tx.pos(tiempoActual()); tx.copy(kf = emptyList(), x = k.x, y = k.y, tam = (tx.tam * k.esc).coerceIn(0.01f, 1.5f)) } }
+        panelTexto.addView(bKtT, ui.lp())
         kfTextoInfo = ui.texto("", 13f, Ui.gris).apply { setPadding(0, ui.dp(4), 0, 0) }
         panelTexto.addView(kfTextoInfo, ui.lp())
         b.addView(panelTexto, ui.lp())
@@ -1011,19 +945,7 @@ class TabletActivity : Activity() {
     }
 
     private fun refrescarTextos() {
-        listaTextos.removeAllViews()
         if (ed.textos.none { it.id == selTexto }) selTexto = null
-        ed.textos.sortedBy { it.ini }.forEach { t ->
-            val elegido = t.id == selTexto
-            val etiqueta = when (t.tipo) { "imagen" -> "Imagen"; "emoji" -> "Sticker ${t.texto}"; else -> t.texto.replace('\n', ' ') }
-            val fila = ui.texto("${Datos.reloj(t.ini)} → ${Datos.reloj(t.fin)}   $etiqueta", 14f, if (elegido) Ui.fondo else Ui.tinta).apply {
-                maxLines = 1; ellipsize = TextUtils.TruncateAt.END
-                setPadding(ui.dp(10), ui.dp(8), ui.dp(10), ui.dp(8))
-                background = GradientDrawable().apply { cornerRadius = ui.dp(8).toFloat(); setColor(if (elegido) Ui.amarillo else Ui.fondo); setStroke(ui.dp(1), Ui.linea) }
-                setOnClickListener { selTexto = t.id; irA(t.ini); refrescarTextos(); raiz.requestFocus() }
-            }
-            listaTextos.addView(fila, ui.lp(4))
-        }
         val t = ed.textos.firstOrNull { it.id == selTexto }
         panelTexto.visibility = if (t == null) View.GONE else View.VISIBLE
         if (t != null) {
@@ -1036,7 +958,7 @@ class TabletActivity : Activity() {
                 setStroke(ui.dp(if (hex == t.color) 4 else 1), if (hex == t.color) Ui.amarillo else Ui.linea)
             }
             tamBarra.progress = ((t.tam * 1000).toInt() - 20).coerceIn(0, 180)
-            kfTextoInfo.text = if (t.kf.isEmpty()) "Sin keyframes. Poné el cursor, ubicá el texto y tocá ◆ Keyframe; después mové el cursor, cambiá lugar o tamaño, y se crea otro."
+            kfTextoInfo.text = if (t.kf.isEmpty()) "Sin keyframes. Para animar: poné el cabezal donde arranca el movimiento y tocá ◆ Agregar. Después mové el cabezal y cambiá el lugar o el tamaño sobre el video: el segundo ◆ se crea solo."
                 else "Keyframes: " + t.kf.joinToString(" · ") { Datos.reloj(it.t) }
             tamTexto.text = "Tamaño: ${(t.tam * 1000).toInt() / 10f} % del alto".replace('.', ',')
         }
@@ -1115,7 +1037,6 @@ class TabletActivity : Activity() {
 
     private fun agregarKfTramo() {
         val s = ed.segmentos.getOrNull(sel) ?: return
-        if (indiceActual() != sel) { irA(ed.inicio(sel)); return }
         val rel = relEnTramo()
         val k = s.encuadre(rel).copy(t = rel)
         val l = ed.segmentos.toMutableList()
@@ -1127,7 +1048,7 @@ class TabletActivity : Activity() {
         val s = ed.segmentos.getOrNull(sel) ?: return
         val rel = relEnTramo()
         val cerca = s.kf.minByOrNull { kotlin.math.abs(it.t - rel) } ?: return
-        if (kotlin.math.abs(cerca.t - rel) > 400) { avisar("No hay un keyframe en el cursor."); return }
+        if (kotlin.math.abs(cerca.t - rel) > lineaT.toleranciaMs()) return
         // Al borrar el último, el tramo queda con el valor de ese momento
         val nuevo = if (s.kf.size == 1) s.copy(kf = emptyList(), zoom = cerca.zoom, px = cerca.px, py = cerca.py, vol = cerca.vol)
             else s.copy(kf = s.kf - cerca)
@@ -1145,7 +1066,7 @@ class TabletActivity : Activity() {
         zoomTexto.text = "Zoom: ${(k.zoom * 100).toInt()} %" + if (k.zoom <= 1f) " (subí el zoom para poder mover el encuadre)" else ""
         volBarra.progress = (k.vol * 100).toInt()
         volTexto.text = "Volumen: ${(k.vol * 100).toInt()} %"
-        kfInfo.text = if (s.kf.isEmpty()) "Sin keyframes: zoom, encuadre y volumen fijos en todo el tramo. Para animar: cursor en un punto, ◆ Keyframe; cursor en otro punto, cambiá los valores."
+        kfInfo.text = if (s.kf.isEmpty()) "Sin keyframes: zoom, encuadre y volumen fijos en todo el tramo. Para animar: tocá el tramo en la línea, poné el cabezal y tocá ◆ Agregar; después mové el cabezal y pellizcá o arrastrá el video (o mové las barras): el segundo ◆ se crea solo."
             else "Keyframes: " + s.kf.joinToString(" · ") { Datos.reloj(ed.inicio(sel) + it.t) }
     }
 
@@ -1166,14 +1087,151 @@ class TabletActivity : Activity() {
         if (ed.kfMusica.isNotEmpty()) exoMus?.volume = ed.volMusicaEn(t).coerceIn(0f, 1f)
     }
 
+    /** Crea o corrige el keyframe del texto en el momento t. Si ya hay uno cerca del cabezal, corrige ese. */
     private fun kfTextoEn(tx: Texto, t: Long, f: (KfT) -> KfT): Texto {
-        val n = f(tx.pos(t)).copy(t = t)
-        return tx.copy(kf = (tx.kf.filter { kotlin.math.abs(it.t - t) > 150 } + n).sortedBy { it.t })
+        val tol = if (::lineaT.isInitialized) lineaT.toleranciaMs() else 150L
+        val existente = tx.kf.filter { kotlin.math.abs(it.t - t) <= tol }.minByOrNull { kotlin.math.abs(it.t - t) }
+        val tk = existente?.t ?: t
+        val n = f(tx.pos(tk)).copy(t = tk)
+        return tx.copy(kf = (tx.kf.filter { it !== existente && kotlin.math.abs(it.t - tk) > 150 } + n).sortedBy { it.t })
     }
 
-    private fun agregarKfTexto() {
+    // ---------------------------------------------------------------- botón ◆ de la línea de tiempo
+
+    /** A qué apunta el ◆: "capa" (texto o sticker elegido), "musica", "tramo" o "" (nada elegido). */
+    private fun objetivoKey(): String = when {
+        selTexto != null && ed.textos.any { it.id == selTexto } -> "capa"
+        selMusica && ed.musica.isNotEmpty() -> "musica"
+        sel in ed.segmentos.indices -> "tramo"
+        else -> ""
+    }
+
+    /** ¿El cabezal está dentro del elemento elegido? */
+    private fun cabezalDentro(): Boolean {
         val t = tiempoActual()
-        cambiarTexto { tx -> kfTextoEn(tx, t) { it } }
+        return when (objetivoKey()) {
+            "capa" -> ed.textos.first { it.id == selTexto }.let { t in it.ini..it.fin }
+            "musica" -> true
+            "tramo" -> indiceActual() == sel
+            else -> false
+        }
+    }
+
+    /** ¿Hay un keyframe del elemento elegido justo en el cabezal? */
+    private fun kfEnCabezal(): Boolean {
+        val t = tiempoActual()
+        val tol = lineaT.toleranciaMs()
+        return when (objetivoKey()) {
+            "capa" -> ed.textos.first { it.id == selTexto }.kf.any { kotlin.math.abs(it.t - t) <= tol }
+            "musica" -> ed.kfMusica.any { kotlin.math.abs(it.t - t) <= tol }
+            "tramo" -> indiceActual() == sel && ed.segmentos[sel].kf.any { kotlin.math.abs(it.t - relEnTramo()) <= tol }
+            else -> false
+        }
+    }
+
+    private var estadoKey = ""
+
+    private fun actualizarBotonKey(forzar: Boolean) {
+        if (!::bKey.isInitialized) return
+        val obj = objetivoKey()
+        val quitar = obj.isNotEmpty() && kfEnCabezal()
+        val activo = obj.isNotEmpty() && cabezalDentro()
+        val estado = "$quitar|$activo"
+        if (!forzar && estado == estadoKey) return
+        estadoKey = estado
+        bKey.text = if (quitar) "◆ Quitar" else "◆ Agregar"
+        ui.activo(bKey, activo)
+        bKey.isEnabled = true   // aunque se vea apagado, al tocarlo explica qué falta
+    }
+
+    /** El botón ◆: agrega un keyframe en el cabezal o, si ya hay uno ahí, lo quita. Actúa sobre lo elegido en la línea. */
+    private fun tocarKey() {
+        val obj = objetivoKey()
+        if (obj.isEmpty()) { avisar("Tocá en la línea de tiempo el sticker, texto, tramo o música que querés animar."); return }
+        if (!cabezalDentro()) {
+            avisar(if (obj == "tramo") "Poné el cabezal dentro del tramo elegido." else "Poné el cabezal dentro de la pista elegida.")
+            return
+        }
+        exo?.pause()
+        val t = tiempoActual()
+        val tol = lineaT.toleranciaMs()
+        when (obj) {
+            "capa" -> cambiarTexto { tx ->
+                val cerca = tx.kf.minByOrNull { kotlin.math.abs(it.t - t) }
+                if (cerca != null && kotlin.math.abs(cerca.t - t) <= tol) {
+                    // Al quitar el último, el sticker queda como estaba en ese keyframe
+                    if (tx.kf.size == 1) tx.copy(kf = emptyList(), x = cerca.x, y = cerca.y, tam = (tx.tam * cerca.esc).coerceIn(0.01f, 1.5f))
+                    else tx.copy(kf = tx.kf - cerca)
+                } else kfTextoEn(tx, t) { it }
+            }
+            "musica" -> {
+                val cerca = ed.kfMusica.minByOrNull { kotlin.math.abs(it.t - t) }
+                val nueva = if (cerca != null && kotlin.math.abs(cerca.t - t) <= tol) {
+                    if (ed.kfMusica.size == 1) ed.copy(kfMusica = emptyList(), volMusica = cerca.vol) else ed.copy(kfMusica = ed.kfMusica - cerca)
+                } else ed.copy(kfMusica = (ed.kfMusica.filter { kotlin.math.abs(it.t - t) > 150 } + KfM(t, ed.volMusicaEn(t))).sortedBy { it.t })
+                cambiar(nueva, reconstruirPlayer = false)
+            }
+            "tramo" -> if (kfEnCabezal()) borrarKfTramo() else agregarKfTramo()
+        }
+        actualizarBotonKey(true)
+        raiz.requestFocus()
+    }
+
+    /** Une la línea de tiempo con el editor. */
+    private val oyenteLinea = object : LineaTiempo.Oyente {
+        override fun edicion() = ed
+        override fun tiempo() = tiempoActual()
+        override fun tramoElegido() = sel
+        override fun capaElegida(): String? = selTexto ?: if (selMusica) LineaTiempo.MUSICA else null
+        override fun nombreClip(id: String) = this@TabletActivity.nombreClip(id)
+
+        override fun buscar(t: Long, final: Boolean) {
+            val p = exo ?: return
+            if (!final) {
+                if (!arrastrando) { arrastrando = true; p.pause(); p.setSeekParameters(SeekParameters.CLOSEST_SYNC) }
+                irA(t)
+            } else {
+                arrastrando = false
+                p.setSeekParameters(SeekParameters.EXACT)
+                irA(t)
+                refrescarPanel()
+            }
+            raiz.requestFocus()
+        }
+
+        override fun elegirTramo(i: Int) {
+            sel = i; selTexto = null; selMusica = false
+            refrescarPanel(); raiz.requestFocus()
+        }
+
+        override fun elegirCapa(id: String) {
+            if (id == LineaTiempo.MUSICA) { selMusica = true; selTexto = null } else { selTexto = id; selMusica = false }
+            refrescarPanel(); raiz.requestFocus()
+        }
+
+        override fun elegirNada() {
+            selTexto = null; selMusica = false; sel = -1
+            refrescarPanel(); raiz.requestFocus()
+        }
+
+        override fun cambiarCapa(id: String, ini: Long, fin: Long, mover: Boolean, final: Boolean) {
+            if (final) {
+                arrastreCapa = false
+                guardar(); refrescarPanel(); raiz.requestFocus()
+                return
+            }
+            if (!arrastreCapa) { guardarHistoria(); arrastreCapa = true }
+            ed = ed.copy(textos = ed.textos.map {
+                if (it.id != id) it
+                else {
+                    val d = ini - it.ini
+                    // Al moverlo en el tiempo, los keyframes viajan con el sticker
+                    if (mover) it.copy(ini = ini, fin = fin, kf = it.kf.map { k -> k.copy(t = k.t + d) })
+                    else it.copy(ini = ini, fin = fin)
+                }
+            })
+            dibujarTextos(false)
+        }
     }
 
     /** Muestra la máscara del tramo que se está viendo. */
@@ -1263,7 +1321,6 @@ class TabletActivity : Activity() {
             var iv = vistasRotulos[tx.id]
             if (iv == null) {
                 iv = ImageView(this)
-                iv.setOnTouchListener(arrastre(tx.id))
                 capaTextos.addView(iv, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                 vistasRotulos[tx.id] = iv
             }
@@ -1272,7 +1329,8 @@ class TabletActivity : Activity() {
             val bmp = cacheRotulos.getOrPut(clave) { Rotulo.bitmap(this, tx, w, h) { imagenLocal(it) } ?: Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888) }
             if (iv.tag != clave) { iv.setImageBitmap(bmp); iv.tag = clave }
             val k = tx.pos(t)
-            iv.scaleX = k.esc; iv.scaleY = k.esc
+            val e = k.esc * (if (tx.id == gId) gEscVisual else 1f)
+            iv.scaleX = e; iv.scaleY = e
             iv.translationX = k.x * w - bmp.width / 2f
             iv.translationY = k.y * h - bmp.height / 2f
             iv.visibility = View.VISIBLE
@@ -1281,31 +1339,150 @@ class TabletActivity : Activity() {
         }
     }
 
-    /** Arrastrar un texto con el dedo o el mouse para cambiarlo de lugar. */
-    private fun arrastre(id: String) = View.OnTouchListener { v, e ->
+    // ---------------------------------------------------------------- gestos sobre el video
+
+    private var gObjetivo = 0            // 0 nada · 1 texto o sticker · 2 video (zoom y encuadre del tramo)
+    private var gId: String? = null
+    private var gEscVisual = 1f          // escala mientras se pellizca un sticker sin keyframes (se guarda al soltar)
+    private var gMovio = false
+    private var gCx0 = 0f
+    private var gCy0 = 0f
+    private var gDist0 = 0f
+    private var gK0 = KfT(0, 0.5f, 0.5f, 1f)
+    private var gKv0 = Kf(0)
+    private var gTam0 = 0.1f
+    private var gTocoCapa = false
+
+    /** Centro y separación de los dedos (sin contar el que se está levantando). */
+    private fun dedos(e: MotionEvent): Triple<Float, Float, Float> {
+        val fuera = if (e.actionMasked == MotionEvent.ACTION_POINTER_UP) e.actionIndex else -1
+        var sx = 0f; var sy = 0f; var n = 0
+        for (i in 0 until e.pointerCount) if (i != fuera) { sx += e.getX(i); sy += e.getY(i); n++ }
+        if (n == 0) return Triple(e.x, e.y, 0f)
+        val cx = sx / n; val cy = sy / n
+        var d = 0f
+        if (n >= 2) { for (i in 0 until e.pointerCount) if (i != fuera) d += kotlin.math.hypot(e.getX(i) - cx, e.getY(i) - cy); d /= n }
+        return Triple(cx, cy, d)
+    }
+
+    /** El texto o sticker visible que está debajo del dedo (el de más arriba). */
+    private fun capaEnVista(x: Float, y: Float): String? {
+        val t = tiempoActual()
+        for (tx in ed.textos.asReversed()) {
+            if (t !in tx.ini..tx.fin) continue
+            val iv = vistasRotulos[tx.id] ?: continue
+            if (iv.visibility != View.VISIBLE) continue
+            val d = iv.drawable ?: continue
+            val bw = d.intrinsicWidth.toFloat(); val bh = d.intrinsicHeight.toFloat()
+            val cx = iv.translationX + bw / 2f; val cy = iv.translationY + bh / 2f
+            val mw = kotlin.math.max(bw * iv.scaleX / 2f, ui.dp(24).toFloat())
+            val mh = kotlin.math.max(bh * iv.scaleY / 2f, ui.dp(24).toFloat())
+            if (x in (cx - mw)..(cx + mw) && y in (cy - mh)..(cy + mh)) return tx.id
+        }
+        return null
+    }
+
+    /** Toma como punto de partida cómo está ahora el sticker o el video. */
+    private fun gBase(e: MotionEvent) {
+        // Si se venía pellizcando un sticker sin keyframes, primero se guarda ese tamaño
+        val id = gId
+        if (gObjetivo == 1 && id != null && gEscVisual != 1f) {
+            val f = gEscVisual; gEscVisual = 1f
+            ed = ed.copy(textos = ed.textos.map { if (it.id == id && it.kf.isEmpty()) it.copy(tam = (it.tam * f).coerceIn(0.01f, 1.5f)) else it })
+        }
+        val (cx, cy, d) = dedos(e)
+        gCx0 = cx; gCy0 = cy; gDist0 = d
+        val t = tiempoActual()
+        ed.textos.firstOrNull { it.id == id }?.let { gK0 = it.pos(t); gTam0 = it.tam }
+        ed.segmentos.getOrNull(sel)?.let { gKv0 = it.encuadre(relEnTramo()) }
+    }
+
+    /**
+     * Gestos sobre la vista previa, como en CapCut: un dedo mueve, dos dedos agrandan o achican.
+     * Actúa sobre el texto o sticker tocado (o el elegido); si no hay ninguno, sobre el zoom y el encuadre del tramo.
+     * Si el elemento tiene keyframes, el cambio crea o corrige el keyframe donde está el cabezal.
+     */
+    private val gestoVista = View.OnTouchListener { v, e ->
         val w = capaTextos.width.toFloat(); val h = capaTextos.height.toFloat()
         if (w <= 0 || h <= 0) return@OnTouchListener false
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                if (selTexto != id) { selTexto = id; refrescarTextos() }
-                guardarHistoria()
-                exo?.pause()
                 v.parent?.requestDisallowInterceptTouchEvent(true)
+                exo?.pause()
+                gMovio = false; gEscVisual = 1f
+                val tocada = capaEnVista(e.x, e.y)
+                gTocoCapa = tocada != null
+                val t = tiempoActual()
+                val elegidaVisible = ed.textos.firstOrNull { it.id == selTexto }?.let { t in it.ini..it.fin } == true
+                when {
+                    tocada != null -> {
+                        if (selTexto != tocada) { selTexto = tocada; selMusica = false; refrescarPanel() }
+                        gObjetivo = 1; gId = tocada
+                    }
+                    elegidaVisible -> { gObjetivo = 1; gId = selTexto }
+                    selTexto == null && !selMusica && sel in ed.segmentos.indices && sel == indiceActual() -> { gObjetivo = 2; gId = null }
+                    else -> { gObjetivo = 0; gId = null }
+                }
+                if (gObjetivo != 0) guardarHistoria()
+                gBase(e)
+                true
+            }
+            MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_POINTER_UP -> {
+                if (gObjetivo == 0 && e.actionMasked == MotionEvent.ACTION_POINTER_DOWN && selTexto == null && !selMusica && ed.segmentos.isNotEmpty()) {
+                    // Pellizco sobre el video sin nada elegido: se elige el tramo que se está viendo
+                    sel = indiceActual(); gObjetivo = 2; guardarHistoria(); refrescarPanel()
+                }
+                gBase(e)
                 true
             }
             MotionEvent.ACTION_MOVE -> {
-                val cx = (v.translationX + e.x) / w
-                val cy = (v.translationY + e.y) / h
-                val nx = cx.coerceIn(0.02f, 0.98f); val ny = cy.coerceIn(0.02f, 0.98f)
-                ed = ed.copy(textos = ed.textos.map {
-                    if (it.id != id) it
-                    else if (it.kf.isEmpty()) it.copy(x = nx, y = ny)
-                    else kfTextoEn(it, tiempoActual()) { k -> k.copy(x = nx, y = ny) }
-                })
-                dibujarTextos(false)
+                if (gObjetivo == 0) return@OnTouchListener true
+                val (cx, cy, d) = dedos(e)
+                val slop = ui.dp(6)
+                if (!gMovio && kotlin.math.abs(cx - gCx0) < slop && kotlin.math.abs(cy - gCy0) < slop && (gDist0 == 0f || kotlin.math.abs(d - gDist0) < slop)) return@OnTouchListener true
+                gMovio = true
+                val f = if (gDist0 > 0f && d > 0f) d / gDist0 else 1f
+                val dx = (cx - gCx0) / w; val dy = (cy - gCy0) / h
+                if (gObjetivo == 1) {
+                    val id = gId ?: return@OnTouchListener true
+                    val nx = (gK0.x + dx).coerceIn(0.02f, 0.98f); val ny = (gK0.y + dy).coerceIn(0.02f, 0.98f)
+                    val t = tiempoActual()
+                    ed = ed.copy(textos = ed.textos.map {
+                        if (it.id != id) it
+                        else if (it.kf.isEmpty()) { gEscVisual = f; it.copy(x = nx, y = ny) }
+                        else kfTextoEn(it, t) { k -> k.copy(x = nx, y = ny, esc = (gK0.esc * f).coerceIn(0.05f, 12f)) }
+                    })
+                    dibujarTextos(false)
+                } else {
+                    val z = (gKv0.zoom * f).coerceIn(1f, 3f)
+                    val lim = Interp.limite(z)
+                    val px = (gKv0.px - dx / z).coerceIn(-lim, lim); val py = (gKv0.py - dy / z).coerceIn(-lim, lim)
+                    editarEncuadre(false) { it.copy(zoom = z, px = px, py = py) }
+                }
                 true
             }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { guardar(); refrescarTextos(); raiz.requestFocus(); true }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (!gMovio) {
+                    // Fue un toque: elegir o soltar
+                    if (gObjetivo != 0) historial.removeLastOrNull()
+                    if (!gTocoCapa && e.actionMasked == MotionEvent.ACTION_UP) {
+                        if (selTexto != null || selMusica) { selTexto = null; selMusica = false }
+                        else if (ed.segmentos.isNotEmpty()) sel = indiceActual()
+                        refrescarPanel()
+                    }
+                } else {
+                    val id = gId
+                    if (gObjetivo == 1 && id != null && gEscVisual != 1f) {
+                        val f = gEscVisual
+                        ed = ed.copy(textos = ed.textos.map { if (it.id == id && it.kf.isEmpty()) it.copy(tam = (gTam0 * f).coerceIn(0.01f, 1.5f)) else it })
+                    }
+                    guardar(); refrescarPanel()
+                }
+                gEscVisual = 1f; gObjetivo = 0; gId = null
+                v.parent?.requestDisallowInterceptTouchEvent(false)
+                raiz.requestFocus()
+                true
+            }
             else -> false
         }
     }
