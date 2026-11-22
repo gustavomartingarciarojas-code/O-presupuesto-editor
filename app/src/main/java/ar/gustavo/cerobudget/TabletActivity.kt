@@ -1688,6 +1688,9 @@ class TabletActivity : Activity() {
                 runOnUiThread {
                     clipsCel = lista
                     prefs.edit().putString("clips", a.toString()).apply()
+                    recordarClips(lista)
+                    val n = repararTramos()
+                    if (n > 0) avisar("Volví a unir la línea de tiempo con el video del celular.")
                     conEstado.setTextColor(Ui.verde)
                     conEstado.text = "Conectado con el celular."
                     refrescarClips()
@@ -1749,9 +1752,70 @@ class TabletActivity : Activity() {
 
     // ================================================================== exportar
 
+    /** Guarda nombre, duración y peso de cada video que el celular mostró alguna vez, para reconocerlo si cambia de código. */
+    private fun recordarClips(lista: List<Clip>) {
+        val j = try { JSONObject(prefs.getString("conocidos", "{}") ?: "{}") } catch (_: Exception) { JSONObject() }
+        var cambio = false
+        for (c in lista) if (!j.has(c.id)) {
+            j.put(c.id, JSONObject().put("nombre", c.nombre).put("dur", c.duracionMs).put("bytes", c.bytes)); cambio = true
+        }
+        if (cambio) prefs.edit().putString("conocidos", j.toString()).apply()
+    }
+
+    /** Duración en ms de un proxy guardado en la tablet (0 si no está o no se puede leer). */
+    private fun duracionProxy(id: String): Long {
+        val f = proxyLocal(id)
+        if (!f.exists()) return 0
+        val r = android.media.MediaMetadataRetriever()
+        return try { r.setDataSource(f.path); r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0 }
+            catch (_: Exception) { 0 } finally { try { r.release() } catch (_: Exception) { } }
+    }
+
+    /**
+     * Si en el celular se quitó un video y se lo volvió a agregar, el video cambia de código y la línea de tiempo
+     * queda apuntando a uno que "ya no está". Acá se busca el mismo video (mismo nombre y peso, o misma duración)
+     * y se vuelven a unir los tramos. Devuelve cuántos videos se volvieron a unir.
+     */
+    private fun repararTramos(): Int {
+        if (clipsCel.isEmpty() || ed.segmentos.isEmpty()) return 0
+        val ids = clipsCel.map { it.id }.toSet()
+        val perdidos = ed.segmentos.map { it.clip }.distinct().filter { it !in ids }
+        if (perdidos.isEmpty()) return 0
+        val conocidos = try { JSONObject(prefs.getString("conocidos", "{}") ?: "{}") } catch (_: Exception) { JSONObject() }
+        val cambio = mutableMapOf<String, String>()
+        for (viejo in perdidos) {
+            var c: Clip? = null
+            conocidos.optJSONObject(viejo)?.let { k ->
+                val nombre = k.optString("nombre"); val bytes = k.optLong("bytes"); val dur = k.optLong("dur")
+                c = clipsCel.firstOrNull { it.nombre == nombre && it.bytes == bytes }
+                    ?: clipsCel.firstOrNull { it.nombre == nombre && kotlin.math.abs(it.duracionMs - dur) < 1500 }
+            }
+            if (c == null) {
+                val dur = duracionProxy(viejo)
+                if (dur > 0) c = clipsCel.filter { kotlin.math.abs(it.duracionMs - dur) < 1500 }.minByOrNull { kotlin.math.abs(it.duracionMs - dur) }
+            }
+            if (c == null && perdidos.size == 1 && clipsCel.size == 1) c = clipsCel[0]
+            c?.let { cambio[viejo] = it.id }
+        }
+        if (cambio.isEmpty()) return 0
+        val t = tiempoActual()
+        ed = ed.copy(segmentos = ed.segmentos.map { s -> cambio[s.clip]?.let { s.copy(clip = it) } ?: s })
+        guardar()
+        reconstruir(t.coerceAtMost((ed.total - 1).coerceAtLeast(0)))
+        refrescarPanel()
+        return cambio.size
+    }
+
     private fun exportar() {
         if (exportando || ed.segmentos.isEmpty()) return
         if (base.isEmpty()) { expEstado.setTextColor(Ui.rojo); expEstado.text = "Primero conectate con el celular."; return }
+        repararTramos()
+        val faltan = ed.segmentos.map { it.clip }.distinct().filter { id -> clipsCel.none { it.id == id } }
+        if (faltan.isNotEmpty()) {
+            expEstado.setTextColor(Ui.rojo)
+            expEstado.text = "La línea de tiempo usa un video que el celular ya no tiene y no lo pude reconocer. Volvé a agregarlo en el celular (el mismo archivo) y esperá a que diga \"Proxy listo\"."
+            return
+        }
         exportando = true
         exo?.pause()
         ui.activo(bExportar, false)
